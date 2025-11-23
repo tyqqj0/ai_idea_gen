@@ -1,28 +1,22 @@
 providers:
-  # 示例：Gemini 主线路
-  gemini_main:
-    type: "google"
-    base_url: "https://zjuapi.com/v1"
+  primary_gemini:
+    type: "gemini"
+    base_url: "https://zhiuai.com/v1"
     model: "gemini-3-pro-preview"
-    api_key_env: "ObUPynbwDvm3o7s1JZLbmKnRv88x3P0LOPYYtv0iNhp0ebn4"
+    api_key_env: "GEMINI_API_KEY"
+
 
 chains:
-  # 默认通用链
   default:
-    - provider: "gemini_main"
-      timeout_s: 15
+    - provider: "primary_gemini"
+      timeout_s: 20
 
-  # 扩展想法链
   idea_expand:
-    - provider: "gemini_main"
+    - provider: "primary_gemini"
 
-  # 深度调研链
   research:
-    - provider: "openai_backup"
+    - provider: "primary_gemini"
 
 global:
   max_retries_per_provider: 1
   overall_timeout_s: 60
-
-
-

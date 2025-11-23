@@ -1,9 +1,26 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Protocol
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Protocol
 
 
 class LLMClientLike(Protocol):
-    async def chat_completion(self, messages: list[dict]) -> str: ...
+    async def chat_completion(
+        self, *, chain: str, messages: list[dict], **kwargs: Any
+    ) -> str: ...
+
+
+@dataclass
+class ProcessorResult:
+    """
+    Processor 的标准输出，便于后续写入文档与通知。
+    """
+
+    title: str
+    content_md: str
+    summary: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class BaseDocProcessor(ABC):
@@ -16,11 +33,15 @@ class BaseDocProcessor(ABC):
         self.llm_client = llm_client
 
     @abstractmethod
-    async def run(self, *, doc_content: str, doc_title: str) -> str:
+    async def run(
+        self,
+        *,
+        doc_content: str,
+        doc_title: str,
+        chain: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> ProcessorResult:
         """
-        处理文档内容，返回要写入子文档的 Markdown 文本。
+        处理文档内容，返回标准化结果（Markdown + 摘要等）。
         """
-        ...
-
-
 
