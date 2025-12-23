@@ -26,20 +26,55 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
         processor_result: ProcessorResult,
         notify_user: bool = True,
     ) -> OutputResult:
-        # 兼容现有逻辑：尽量将子文档创建在原文档所在目录下
-        folder_token = source_doc.parent_token or source_doc.doc_token
+        title = processor_result.title or f"{source_doc.title} - AI 生成"
 
-        child_doc_token = await self._feishu.create_child_doc(
-            folder_token=folder_token,
-            title=processor_result.title or f"{source_doc.title} - AI 生成",
-        )
-        await self._feishu.write_doc_content(child_doc_token, processor_result.content_md)
+        # 1) 优先判断是否为知识库（Wiki）挂载文档
+        wiki_node = await self._feishu.get_wiki_node_by_obj_token(obj_token=source_doc.doc_token)
 
-        child_doc_url = self._build_doc_url(child_doc_token)
+        if wiki_node:
+            # === 知识库路径 ===
+            space_id = str(wiki_node.get("space_id") or "")
+            parent_node_token = str(wiki_node.get("node_token") or "")
+            if not space_id or not parent_node_token:
+                raise RuntimeError(f"Invalid wiki node info: {wiki_node}")
 
-        # 回链到原文档末尾
+            child_node = await self._feishu.create_wiki_child_doc(
+                space_id=space_id,
+                parent_node_token=parent_node_token,
+                title=title,
+                obj_type="docx",
+                node_type="origin",
+            )
+
+            child_obj_token = (
+                child_node.get("obj_token")
+                or child_node.get("objToken")
+                or child_node.get("document_id")
+                or child_node.get("doc_token")
+            )
+            child_node_token = child_node.get("node_token") or child_node.get("nodeToken")
+            if not child_obj_token or not child_node_token:
+                raise RuntimeError(f"Unable to parse wiki child node: {child_node}")
+
+            child_doc_token = str(child_obj_token)
+            child_doc_url = self._build_wiki_url(str(child_node_token))
+
+            # 写入内容（写内容始终走 docx obj_token）
+            await self._feishu.write_doc_content(child_doc_token, processor_result.content_md)
+        else:
+            # === 云盘路径 ===
+            # 尽量将子文档创建在原文档所在目录下（folder_token）
+            folder_token = source_doc.parent_token or source_doc.doc_token
+            child_doc_token = await self._feishu.create_child_doc(
+                folder_token=folder_token,
+                title=title,
+            )
+            await self._feishu.write_doc_content(child_doc_token, processor_result.content_md)
+            child_doc_url = self._build_doc_url(child_doc_token)
+
+        # 2) 回链到原文档末尾（原文档可为 Wiki 挂载的 docx，仍可用 docx blocks 接口）
         await self._feishu.append_reference_block(
-            source_doc.doc_token, processor_result.title, child_doc_url
+            source_doc.doc_token, title, child_doc_url
         )
 
         # 可选通知
@@ -56,11 +91,18 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
         return OutputResult(
             child_doc_token=child_doc_token,
             child_doc_url=child_doc_url,
-            metadata={"output": "feishu_child_doc"},
+            metadata={
+                "output": "feishu_child_doc",
+                "source_is_wiki": bool(wiki_node),
+                "wiki_node": wiki_node,
+            },
         )
 
     def _build_doc_url(self, doc_token: str) -> str:
         return f"https://feishu.cn/docx/{doc_token}"
+
+    def _build_wiki_url(self, node_token: str) -> str:
+        return f"https://feishu.cn/wiki/{node_token}"
 
     def _build_notify_card(
         self, *, ctx: "ProcessContext", child_doc_url: str, summary: str | None

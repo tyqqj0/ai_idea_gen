@@ -97,6 +97,59 @@ class FeishuClient:
         )
         return data.get("data", {}).get("content", "")
 
+    async def get_wiki_node_by_obj_token(
+        self, *, obj_token: str, obj_type: str = "docx"
+    ) -> Optional[Dict[str, Any]]:
+        """
+        如果文档挂载在知识库（Wiki）中，返回对应的 node 信息（包含 space_id/node_token/obj_token 等）。
+        如果不在知识库中，返回 None。
+
+        参考：wiki v2 get_node（通过 obj_token 定位节点）
+        """
+        try:
+            data = await self._request(
+                "GET",
+                "/open-apis/wiki/v2/spaces/get_node",
+                params={"obj_token": obj_token, "obj_type": obj_type},
+            )
+        except FeishuAPIError:
+            return None
+
+        node = data.get("data", {}).get("node")
+        if not node:
+            return None
+        return node
+
+    async def create_wiki_child_doc(
+        self,
+        *,
+        space_id: str,
+        parent_node_token: str,
+        title: str,
+        obj_type: str = "docx",
+        node_type: str = "origin",
+    ) -> Dict[str, Any]:
+        """
+        在知识库指定父节点下创建子节点，并创建/挂载一个 docx 对象。
+
+        说明：
+        - 这里优先走“创建节点时指定 obj_type/title”路径（由 Wiki 创建并挂载对象），避免 drive/docx 的 folder_token 挂载问题。
+        - 成功返回 node 信息（包含 node_token/obj_token/space_id 等）。
+        """
+        payload = {
+            "parent_node_token": parent_node_token,
+            "obj_type": obj_type,
+            "node_type": node_type,
+            "title": title,
+        }
+        data = await self._request(
+            "POST", f"/open-apis/wiki/v2/spaces/{space_id}/nodes", json=payload
+        )
+        node = data.get("data", {}).get("node") or data.get("data", {}).get("wiki_node")
+        if not node:
+            raise FeishuAPIError(f"Unable to parse wiki node from response: {data}")
+        return node
+
     async def create_child_doc(self, folder_token: str, title: str) -> str:
         """
         在指定目录下创建子文档，返回子文档 token。
