@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Type
+from typing import Any, Awaitable, Callable, Dict, Optional, Type
 
 from backend.core.llm_client import LLMClient
 from backend.services.feishu import FeishuClient
@@ -11,6 +11,8 @@ from backend.services.processors.base import BaseDocProcessor, ProcessorResult
 from backend.services.outputs.base import BaseOutputHandler
 
 logger = logging.getLogger(__name__)
+
+ProgressFn = Callable[[str, int, str], Awaitable[None]]
 
 
 @dataclass
@@ -68,8 +70,18 @@ class ProcessManager:
         self._llm_client = llm_client
         self._registry = workflow_registry
 
-    async def process_doc(self, ctx: ProcessContext) -> ProcessResult:
+    async def process_doc(
+        self, ctx: ProcessContext, *, progress: ProgressFn | None = None
+    ) -> ProcessResult:
+        async def _noop(stage: str, percent: int, message: str) -> None:
+            _ = stage
+            _ = percent
+            _ = message
+
+        report = progress or _noop
+
         workflow = self._registry.get(ctx.mode)
+        await report("fetch_meta", 5, "获取文档元信息")
         file_meta = await self._feishu.get_doc_meta(ctx.doc_token)
         file_info = file_meta.get("file") or file_meta
         doc_title = file_info.get("name") or file_info.get("title") or "未命名文档"
@@ -79,8 +91,10 @@ class ProcessManager:
             or file_info.get("parent_id")
         )
 
+        await report("fetch_content", 15, "读取文档内容")
         doc_content = await self._feishu.get_doc_content(ctx.doc_token)
         processor = workflow.processor_cls(self._llm_client)
+        await report("llm", 35, "调用模型生成内容")
         processor_result = await processor.run(
             doc_content=doc_content,
             doc_title=doc_title,
@@ -88,6 +102,7 @@ class ProcessManager:
             context={"trigger_source": ctx.trigger_source},
         )
 
+        await report("output", 80, "输出落地（写入/推送）")
         output_handler = workflow.output_factory(self._feishu, self._llm_client)
         output_result = await output_handler.handle(
             ctx=ctx,
@@ -98,6 +113,7 @@ class ProcessManager:
             notify_user=workflow.notify_user,
         )
 
+        await report("done", 100, "处理完成")
         return ProcessResult(
             child_doc_token=output_result.child_doc_token,
             child_doc_url=output_result.child_doc_url,

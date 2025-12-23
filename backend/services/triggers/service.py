@@ -34,12 +34,24 @@ class TriggerService:
         task_id = await self._tasks.create_task(
             context=asdict(ctx), idempotency_key=idempotency_key
         )
+        await self._tasks.update_progress(
+            task_id, stage="queued", percent=0, message="任务已进入队列"
+        )
         asyncio.create_task(self._run(task_id, ctx))
         return task_id
 
     async def _run(self, task_id: str, ctx: ProcessContext) -> None:
         try:
-            result = await self._pm.process_doc(ctx)
+            await self._tasks.update_progress(
+                task_id, stage="started", percent=1, message="开始处理"
+            )
+
+            async def progress(stage: str, percent: int, message: str) -> None:
+                await self._tasks.update_progress(
+                    task_id, stage=stage, percent=percent, message=message
+                )
+
+            result = await self._pm.process_doc(ctx, progress=progress)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Processing failed task_id=%s doc=%s", task_id, ctx.doc_token)
             await self._tasks.fail(task_id, str(exc))

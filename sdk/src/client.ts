@@ -67,16 +67,59 @@ export class FeishuAIDocSDK {
      */
     public async generate(options: GenerateOptions): Promise<GenerateResult> {
         const accepted = await this.trigger(options);
-        const task = await this.waitTask(accepted.task_id, {
-            pollIntervalMs: options.pollIntervalMs,
-            timeoutMs: options.timeoutMs,
+    const taskId = accepted.task_id;
+
+    const pollIntervalMs = options.pollIntervalMs ?? 2000;
+    const timeoutMs = options.timeoutMs ?? 180_000;
+    const deadline = Date.now() + timeoutMs;
+
+    let lastStage: string | undefined;
+    let lastPercent: number | undefined;
+    let lastStatus: string | undefined;
+
+    while (true) {
+      const task = await this.getTask(taskId);
+      const stage = task.progress?.stage ?? undefined;
+      const percent = task.progress?.percent ?? undefined;
+      const message = task.progress?.message ?? undefined;
+
+      const statusChanged = task.status !== lastStatus;
+      const stageChanged = stage !== lastStage;
+      const percentChanged = percent !== lastPercent;
+
+      if (options.onProgress && (statusChanged || stageChanged || percentChanged)) {
+        options.onProgress({
+          taskId,
+          status: task.status,
+          stage,
+          percent,
+          message,
+          raw: task,
         });
+      }
 
+      lastStatus = task.status;
+      lastStage = stage;
+      lastPercent = percent;
+
+      if (task.status === "succeeded" || task.status === "failed") {
         const result = task.result ?? {};
-        const childDocUrl = typeof result["child_doc_url"] === "string" ? (result["child_doc_url"] as string) : undefined;
-        const childDocToken = typeof result["child_doc_token"] === "string" ? (result["child_doc_token"] as string) : undefined;
-
+        const childDocUrl =
+          typeof result["child_doc_url"] === "string"
+            ? (result["child_doc_url"] as string)
+            : undefined;
+        const childDocToken =
+          typeof result["child_doc_token"] === "string"
+            ? (result["child_doc_token"] as string)
+            : undefined;
         return { task, childDocUrl, childDocToken };
+      }
+
+      if (Date.now() >= deadline) {
+        throw new TimeoutError(`generate timeout: task_id=${taskId}`);
+      }
+      await sleep(pollIntervalMs);
+    }
     }
 }
 

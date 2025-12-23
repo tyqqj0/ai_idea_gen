@@ -42,6 +42,7 @@ class TaskStatusResponse(BaseModel):
     status: TaskStatus
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    progress: Optional[Dict[str, Any]] = None
     created_at: float
     updated_at: Optional[float] = None
 
@@ -107,6 +108,7 @@ async def get_task_status(task_id: str) -> TaskStatusResponse:
         status=task["status"],
         result=task.get("result"),
         error=task.get("error"),
+        progress=task.get("progress"),
         created_at=task.get("created_at", 0.0),
         updated_at=task.get("updated_at"),
     )

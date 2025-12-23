@@ -34,10 +34,30 @@ class TaskStore:
                 "status": "running",
                 "created_at": time.time(),
                 "context": context,
+                "progress": {
+                    "stage": "accepted",
+                    "percent": 0,
+                    "message": "任务已创建",
+                },
             }
             if idempotency_key:
                 self._idempotency[idempotency_key] = task_id
             return task_id
+
+    async def update_progress(
+        self,
+        task_id: str,
+        *,
+        stage: str,
+        percent: int | None = None,
+        message: str | None = None,
+    ) -> None:
+        payload: Dict[str, Any] = {"progress": {"stage": stage}}
+        if percent is not None:
+            payload["progress"]["percent"] = int(percent)
+        if message is not None:
+            payload["progress"]["message"] = message
+        await self._update(task_id, payload)
 
     async def succeed(self, task_id: str, result: Dict[str, Any]) -> None:
         await self._update(

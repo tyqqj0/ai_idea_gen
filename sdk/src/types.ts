@@ -20,6 +20,11 @@ export interface TaskStatusResponse {
   status: TaskStatus;
   result?: Record<string, unknown> | null;
   error?: string | null;
+  progress?: {
+    stage?: string;
+    percent?: number;
+    message?: string;
+  } | null;
   created_at: number;
   updated_at?: number | null;
 }
@@ -66,6 +71,17 @@ export interface GenerateOptions extends TriggerOptions {
    * 最大等待时间（毫秒）
    */
   timeoutMs?: number;
+  /**
+   * 进度回调：每次轮询拿到新状态/进度时触发
+   */
+  onProgress?: (evt: {
+    taskId: string;
+    status: TaskStatus;
+    stage?: string;
+    percent?: number;
+    message?: string;
+    raw: TaskStatusResponse;
+  }) => void;
 }
 
 export interface GenerateResult {

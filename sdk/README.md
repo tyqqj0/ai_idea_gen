@@ -27,6 +27,10 @@ const res = await sdk.generate({
   userId: "ou_xxx",
   mode: "idea_expand",
   triggerSource: "docs_addon",
+  onProgress: (p) => {
+    // 后端会返回 progress: {stage, percent, message}
+    console.log(`[${p.status}] ${p.percent ?? "-"}% ${p.stage ?? ""} ${p.message ?? ""}`);
+  },
 });
 
 console.log(res.childDocUrl, res.task.status, res.task.result);
