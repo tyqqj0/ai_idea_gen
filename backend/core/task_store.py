@@ -17,16 +17,27 @@ class TaskStore:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._tasks: Dict[str, Dict[str, Any]] = {}
+        # 幂等键 -> task_id，用于事件回调/重试去重
+        self._idempotency: Dict[str, str] = {}
 
-    async def create_task(self, *, context: Dict[str, Any]) -> str:
-        task_id = uuid.uuid4().hex
+    async def create_task(
+        self, *, context: Dict[str, Any], idempotency_key: str | None = None
+    ) -> str:
         async with self._lock:
+            if idempotency_key:
+                existing = self._idempotency.get(idempotency_key)
+                if existing and existing in self._tasks:
+                    return existing
+
+            task_id = uuid.uuid4().hex
             self._tasks[task_id] = {
                 "status": "running",
                 "created_at": time.time(),
                 "context": context,
             }
-        return task_id
+            if idempotency_key:
+                self._idempotency[idempotency_key] = task_id
+            return task_id
 
     async def succeed(self, task_id: str, result: Dict[str, Any]) -> None:
         await self._update(
