@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Type
+from typing import Any, Callable, Dict, Optional, Type
 
 from backend.core.llm_client import LLMClient
 from backend.services.feishu import FeishuClient
@@ -25,7 +25,7 @@ class ProcessContext:
 class WorkflowConfig:
     processor_cls: Type[BaseDocProcessor]
     chain: str
-    output_cls: Type[BaseOutputHandler]
+    output_factory: Callable[[FeishuClient, LLMClient], BaseOutputHandler]
     notify_user: bool = True
 
 
@@ -88,7 +88,7 @@ class ProcessManager:
             context={"trigger_source": ctx.trigger_source},
         )
 
-        output_handler = workflow.output_cls(feishu_client=self._feishu)
+        output_handler = workflow.output_factory(self._feishu, self._llm_client)
         output_result = await output_handler.handle(
             ctx=ctx,
             source_doc=SourceDoc(

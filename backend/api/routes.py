@@ -13,14 +13,11 @@ from backend.core.manager import (
     ProcessContext,
     ProcessManager,
     ProcessResult,
-    WorkflowConfig,
     WorkflowRegistry,
 )
+from backend.core.workflow_loader import build_default_workflow_registry, load_workflow_registry
 from backend.core.task_store import TaskStatus, TaskStore
 from backend.services.feishu import FeishuClient
-from backend.services.outputs.feishu_child_doc import FeishuChildDocOutputHandler
-from backend.services.processors.expander import IdeaExpanderProcessor
-from backend.services.processors.researcher import ResearchProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -50,22 +47,14 @@ class TaskStatusResponse(BaseModel):
 
 
 task_store = TaskStore()
-workflow_registry = WorkflowRegistry(
-    {
-        "idea_expand": WorkflowConfig(
-            processor_cls=IdeaExpanderProcessor,
-            chain="idea_expand",
-            output_cls=FeishuChildDocOutputHandler,
-            notify_user=True,
-        ),
-        "research": WorkflowConfig(
-            processor_cls=ResearchProcessor,
-            chain="research",
-            output_cls=FeishuChildDocOutputHandler,
-            notify_user=True,
-        ),
-    }
-)
+
+try:
+    workflow_registry = load_workflow_registry()
+except Exception as exc:  # noqa: BLE001
+    # 配置文件缺失/配置错误时兜底（便于本地快速启动），同时打印告警
+    logger.warning("Failed to load workflow_config.yml, fallback to default registry: %s", exc)
+    workflow_registry = build_default_workflow_registry()
+
 process_manager = ProcessManager(
     feishu_client=FeishuClient(),
     llm_client=LLMClient(),

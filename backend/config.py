@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     # 通用业务配置
     PROCESS_TIMEOUT: int = 60
 
+    # 示例输出：Webhook（可选）
+    WEBHOOK_OUTPUT_URL: str | None = None
+    WEBHOOK_OUTPUT_TIMEOUT_S: float = 10.0
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
