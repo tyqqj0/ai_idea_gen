@@ -1,15 +1,21 @@
 providers:
   primary_gemini:
-    type: "gemini"
-    base_url: "https://zhiuai.com/v1"
+    type: "openai-compatible"
+    base_url: "https://zjuapi.com/v1"
     model: "gemini-3-pro-preview"
+    api_key_env: "GEMINI_API_KEY"
+
+  no_thinking_gemini:
+    type: "openai-compatible"
+    base_url: "https://zjuapi.com/v1"
+    model: "gemini-2.5-flash-nothinking"
     api_key_env: "GEMINI_API_KEY"
 
 
 chains:
   default:
-    - provider: "primary_gemini"
-      timeout_s: 20
+    - provider: "no_thinking_gemini"
+      timeout_s: 60
 
   idea_expand:
     - provider: "primary_gemini"

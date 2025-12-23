@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from json import JSONDecodeError
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -71,11 +72,21 @@ class FeishuClient:
     async def get_doc_meta(self, doc_token: str) -> Dict[str, Any]:
         """
         获取文档元数据（包括 parent_token, title）。
+        注意：新版文档（docx）需使用 docx 接口获取信息。
         """
-        data = await self._request(
-            "GET", f"/open-apis/drive/v1/files/{doc_token}/meta"
-        )
-        return data.get("data", {})
+        try:
+            # 尝试使用 docx 接口获取元数据
+            data = await self._request(
+                "GET", f"/open-apis/docx/v1/documents/{doc_token}"
+            )
+            # docx 接口返回结构: {"data": {"document": {"title": "...", ...}}}
+            return data.get("data", {}).get("document", {})
+        except FeishuAPIError as e:
+            # 如果 docx 接口返回 404 (资源不存在) 或者 400 (Bad Request)，可能是旧版文档或其他情况
+            # 但根据测试，drive/v1/files 接口对 docx token 返回 404 Gateway Error，
+            # 所以优先使用 docx 接口。
+            # 如果需要 fallback，可以在这里处理，但目前直接抛出更清晰
+            raise e
 
     async def get_doc_content(self, doc_token: str) -> str:
         """
@@ -178,7 +189,15 @@ class FeishuClient:
             json=json,
             headers=headers,
         )
-        data = resp.json()
+        try:
+            data = resp.json()
+        except JSONDecodeError:
+            # 针对非 JSON 响应（如 404 page not found, 502 Bad Gateway 等）做容错处理
+            raise FeishuAPIError(
+                f"Feishu API returned non-JSON response. Status: {resp.status_code}, Body: {resp.text[:200]}",
+                status_code=resp.status_code,
+            )
+
         if resp.status_code != 200 or data.get("code") != 0:
             raise FeishuAPIError(
                 f"Feishu API error path={path}, status={resp.status_code}, data={data}",

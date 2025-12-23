@@ -18,6 +18,7 @@ from backend.core.manager import (
 )
 from backend.core.task_store import TaskStatus, TaskStore
 from backend.services.feishu import FeishuClient
+from backend.services.outputs.feishu_child_doc import FeishuChildDocOutputHandler
 from backend.services.processors.expander import IdeaExpanderProcessor
 from backend.services.processors.researcher import ResearchProcessor
 
@@ -54,11 +55,13 @@ workflow_registry = WorkflowRegistry(
         "idea_expand": WorkflowConfig(
             processor_cls=IdeaExpanderProcessor,
             chain="idea_expand",
+            output_cls=FeishuChildDocOutputHandler,
             notify_user=True,
         ),
         "research": WorkflowConfig(
             processor_cls=ResearchProcessor,
             chain="research",
+            output_cls=FeishuChildDocOutputHandler,
             notify_user=True,
         ),
     }

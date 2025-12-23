@@ -1,6 +1,10 @@
 from fastapi import FastAPI
 
 from backend.config import get_settings
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from backend.api.routes import router as api_router
 
 

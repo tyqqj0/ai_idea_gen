@@ -3,6 +3,7 @@ set -euo pipefail
 
 cd /home/parser/code/ai_idea_gen
 
+# 自动将.env文件中的变量读入环境变量
 if [[ -f .env ]]; then
   set -a
   # shellcheck disable=SC1091

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Type
+from typing import Any, Dict, Optional, Type
 
 from backend.core.llm_client import LLMClient
 from backend.services.feishu import FeishuClient
+from backend.services.outputs.base import OutputResult, SourceDoc
 from backend.services.processors.base import BaseDocProcessor, ProcessorResult
+from backend.services.outputs.base import BaseOutputHandler
 
 logger = logging.getLogger(__name__)
 
@@ -23,14 +25,16 @@ class ProcessContext:
 class WorkflowConfig:
     processor_cls: Type[BaseDocProcessor]
     chain: str
+    output_cls: Type[BaseOutputHandler]
     notify_user: bool = True
 
 
 @dataclass
 class ProcessResult:
-    child_doc_token: str
-    child_doc_url: str
+    child_doc_token: Optional[str]
+    child_doc_url: Optional[str]
     processor_result: ProcessorResult
+    output_result: OutputResult
 
 
 class WorkflowRegistry:
@@ -84,69 +88,19 @@ class ProcessManager:
             context={"trigger_source": ctx.trigger_source},
         )
 
-        folder_token = parent_token or ctx.doc_token
-        child_doc_token = await self._feishu.create_child_doc(
-            folder_token=folder_token,
-            title=processor_result.title or f"{doc_title} - AI 生成",
+        output_handler = workflow.output_cls(feishu_client=self._feishu)
+        output_result = await output_handler.handle(
+            ctx=ctx,
+            source_doc=SourceDoc(
+                doc_token=ctx.doc_token, title=doc_title, parent_token=parent_token
+            ),
+            processor_result=processor_result,
+            notify_user=workflow.notify_user,
         )
-
-        await self._feishu.write_doc_content(
-            child_doc_token, processor_result.content_md
-        )
-
-        child_doc_url = self._build_doc_url(child_doc_token)
-        await self._feishu.append_reference_block(
-            ctx.doc_token, processor_result.title, child_doc_url
-        )
-
-        if workflow.notify_user:
-            card = self._build_notify_card(
-                ctx=ctx,
-                child_doc_url=child_doc_url,
-                summary=processor_result.summary,
-            )
-            try:
-                await self._feishu.send_card(user_id=ctx.user_id, card_content=card)
-            except Exception as exc:  # noqa: BLE001
-                # 通知失败不应影响主流程
-                logger.warning("Failed to send Feishu card: %s", exc)
 
         return ProcessResult(
-            child_doc_token=child_doc_token,
-            child_doc_url=child_doc_url,
+            child_doc_token=output_result.child_doc_token,
+            child_doc_url=output_result.child_doc_url,
             processor_result=processor_result,
+            output_result=output_result,
         )
-
-    def _build_doc_url(self, doc_token: str) -> str:
-        return f"https://feishu.cn/docx/{doc_token}"
-
-    def _build_notify_card(
-        self,
-        *,
-        ctx: ProcessContext,
-        child_doc_url: str,
-        summary: str | None,
-    ) -> Dict[str, Any]:
-        summary_text = summary or "处理完成，可前往子文档查看详情。"
-        return {
-            "config": {"wide_screen_mode": True},
-            "header": {
-                "title": {
-                    "tag": "plain_text",
-                    "content": "AI 文档处理完成",
-                }
-            },
-            "elements": [
-                {
-                    "tag": "div",
-                    "text": {
-                        "tag": "lark_md",
-                        "content": (
-                            f"**处理模式**：{ctx.mode}\n"
-                            f"**结果**：[点击查看]({child_doc_url})\n\n"
-                            f"{summary_text}"
-                        ),
-                    },
-                }
-            ],
-        }
