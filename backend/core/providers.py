@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -100,6 +100,107 @@ class OpenAICompatibleProvider(LLMProvider):
             ) from exc
 
 
+class GeminiProvider(LLMProvider):
+    """
+    调用 Google Gemini GenerateContent 接口的 Provider。
+    """
+
+    async def chat(self, messages: List[Dict[str, Any]], **kwargs: Any) -> str:
+        payload = self._build_payload(messages, **kwargs)
+
+        try:
+            resp = await self._client.post(
+                f"/models/{self.config.model}:generateContent",
+                params={"key": self._api_key},
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                },
+            )
+        except httpx.RequestError as exc:
+            raise LLMProviderError(
+                f"Network error for Gemini provider {self.name}: {exc}"
+            ) from exc
+
+        if resp.status_code >= 500:
+            raise LLMProviderError(
+                f"Server error from Gemini provider {self.name}: {resp.status_code} {resp.text}"
+            )
+
+        if resp.status_code == 429:
+            raise LLMProviderError(
+                f"Rate limited by Gemini provider {self.name}: {resp.status_code} {resp.text}"
+            )
+
+        if resp.status_code >= 400:
+            # Gemini 大部分 4xx 代表请求问题，视为不可重试
+            raise NonRetryableLLMError(
+                f"Client error from Gemini provider {self.name}: {resp.status_code} {resp.text}"
+            )
+
+        data = resp.json()
+        try:
+            candidates = data["candidates"]
+            for candidate in candidates:
+                content = candidate.get("content", {})
+                parts = content.get("parts", [])
+                text = "".join(part.get("text", "") for part in parts if "text" in part).strip()
+                if text:
+                    return text
+        except (KeyError, TypeError) as exc:
+            raise LLMProviderError(
+                f"Invalid response format from Gemini provider {self.name}: {data}"
+            ) from exc
+
+        raise LLMProviderError(
+            f"Gemini provider {self.name} returned empty response: {data}"
+        )
+
+    def _build_payload(
+        self, messages: List[Dict[str, Any]], **kwargs: Any
+    ) -> Dict[str, Any]:
+        system_instruction: Optional[str] = None
+        contents: List[Dict[str, Any]] = []
+
+        for message in messages:
+            role = message.get("role")
+            content = message.get("content")
+            if not content:
+                continue
+
+            if role == "system":
+                system_instruction = (
+                    f"{system_instruction}\n\n{content}"
+                    if system_instruction
+                    else str(content)
+                )
+                continue
+
+            contents.append(
+                {
+                    "role": "user" if role != "assistant" else "model",
+                    "parts": [{"text": str(content)}],
+                }
+            )
+
+        payload: Dict[str, Any] = {"contents": contents}
+
+        if system_instruction:
+            payload["systemInstruction"] = {
+                "parts": [{"text": system_instruction}],
+            }
+
+        generation_config: Dict[str, Any] = {}
+        for key in ("temperature", "top_p", "top_k", "max_output_tokens"):
+            if key in kwargs and kwargs[key] is not None:
+                generation_config[key] = kwargs[key]
+
+        if generation_config:
+            payload["generationConfig"] = generation_config
+
+        return payload
+
+
 def build_provider(name: str, cfg: ProviderConfig) -> LLMProvider:
     """
     工厂方法：根据 type 创建不同的 Provider 实例。
@@ -107,6 +208,8 @@ def build_provider(name: str, cfg: ProviderConfig) -> LLMProvider:
     """
     if cfg.type == "openai-compatible":
         return OpenAICompatibleProvider(name, cfg)
+    if cfg.type == "gemini":
+        return GeminiProvider(name, cfg)
 
     # 预留其它协议类型
     raise NonRetryableLLMError(f"Unsupported provider type={cfg.type} for {name}")
