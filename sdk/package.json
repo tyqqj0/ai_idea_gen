@@ -1,0 +1,19 @@
+{
+    "name": "@ai-idea-gen/feishu-doc-sdk",
+    "version": "0.1.0",
+    "description": "JS/TS SDK for AI Idea Generator backend (Feishu Docs add-on integration)",
+    "type": "module",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "files": [
+        "dist",
+        "README.md"
+    ],
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "clean": "rm -rf dist"
+    },
+    "devDependencies": {
+        "typescript": "^5.6.3"
+    }
+}
