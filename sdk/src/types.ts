@@ -5,6 +5,8 @@ export interface AddonProcessRequest {
   user_id: string;
   mode?: Mode;
   trigger_source?: string | null;
+  wiki_node_token?: string | null;
+  wiki_space_id?: string | null;
 }
 
 export interface AddonProcessAccepted {
@@ -60,6 +62,8 @@ export interface TriggerOptions {
   userId: string;
   mode?: Mode;
   triggerSource?: string;
+  wikiNodeToken?: string;
+  wikiSpaceId?: string;
 }
 
 export interface GenerateOptions extends TriggerOptions {

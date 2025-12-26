@@ -30,6 +30,8 @@ export class FeishuAIDocSDK {
             user_id: options.userId,
             mode: options.mode,
             trigger_source: options.triggerSource ?? "docs_addon",
+      wiki_node_token: options.wikiNodeToken ?? null,
+      wiki_space_id: options.wikiSpaceId ?? null,
         };
         return await this.http.postJSON<AddonProcessAccepted>("/addon/process", payload);
     }

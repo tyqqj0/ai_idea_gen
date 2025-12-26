@@ -97,27 +97,19 @@ class FeishuClient:
         )
         return data.get("data", {}).get("content", "")
 
-    async def get_wiki_node_by_obj_token(
-        self, *, obj_token: str, obj_type: str = "docx"
-    ) -> Optional[Dict[str, Any]]:
+    async def get_wiki_node_by_token(self, *, node_token: str) -> Dict[str, Any]:
         """
-        如果文档挂载在知识库（Wiki）中，返回对应的 node 信息（包含 space_id/node_token/obj_token 等）。
-        如果不在知识库中，返回 None。
-
-        参考：wiki v2 get_node（通过 obj_token 定位节点）
+        通过 node_token 获取知识库节点信息（包含 space_id、obj_token 等）。
+        需要应用开通 wiki:node:read（或更高）权限。
         """
-        try:
-            data = await self._request(
-                "GET",
-                "/open-apis/wiki/v2/spaces/get_node",
-                params={"obj_token": obj_token, "obj_type": obj_type},
-            )
-        except FeishuAPIError:
-            return None
-
+        data = await self._request(
+            "GET",
+            "/open-apis/wiki/v2/spaces/get_node",
+            params={"token": node_token},
+        )
         node = data.get("data", {}).get("node")
         if not node:
-            return None
+            raise FeishuAPIError(f"Unable to parse wiki node from response: {data}")
         return node
 
     async def create_wiki_child_doc(

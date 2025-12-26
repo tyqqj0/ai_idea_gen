@@ -17,20 +17,3 @@ workflows:
   #   chain: "research"
   #   output: "webhook"
   #   notify_user: false
-
-workflows:
-  idea_expand:
-    processor: "idea_expander"
-    chain: "idea_expand"
-    outputs:
-      - "feishu_child_doc"
-    notify_user: true
-
-  research:
-    processor: "research"
-    chain: "research"
-    outputs:
-      - "feishu_child_doc"
-    notify_user: true
-
-

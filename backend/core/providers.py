@@ -36,8 +36,9 @@ class LLMProvider(ABC):
                 f"Missing API key for provider {name}, env={config.api_key_env}"
             )
 
-        # 这里先简单用一个 client，后续可以加连接池参数
-        self._client = httpx.AsyncClient(base_url=config.base_url, timeout=30.0)
+        # 这里不要用过小的 httpx 超时（否则会抢在上层链路超时之前触发 ReadTimeout）。
+        # 统一由上层 LLMClient 的 asyncio.wait_for(step.timeout_s/overall_timeout_s) 控制超时更清晰。
+        self._client = httpx.AsyncClient(base_url=config.base_url, timeout=120.0)
         self._api_key = api_key
 
     @abstractmethod
@@ -71,7 +72,9 @@ class OpenAICompatibleProvider(LLMProvider):
             )
         except httpx.RequestError as exc:
             # 网络级错误，交给上层 fallback
-            raise LLMProviderError(f"Network error for provider {self.name}: {exc}") from exc
+            raise LLMProviderError(
+                f"Network error for provider {self.name}: {type(exc).__name__} {exc!r}"
+            ) from exc
 
         if resp.status_code >= 500:
             # 服务器错误，允许 fallback
@@ -119,7 +122,7 @@ class GeminiProvider(LLMProvider):
             )
         except httpx.RequestError as exc:
             raise LLMProviderError(
-                f"Network error for Gemini provider {self.name}: {exc}"
+                f"Network error for Gemini provider {self.name}: {type(exc).__name__} {exc!r}"
             ) from exc
 
         if resp.status_code >= 500:

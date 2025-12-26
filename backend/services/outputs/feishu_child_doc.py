@@ -28,19 +28,22 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
     ) -> OutputResult:
         title = processor_result.title or f"{source_doc.title} - AI 生成"
 
-        # 1) 优先判断是否为知识库（Wiki）挂载文档
-        wiki_node = await self._feishu.get_wiki_node_by_obj_token(obj_token=source_doc.doc_token)
+        # 1) 知识库优先：如果前端/触发方提供了 wiki_node_token，则走知识库创建子节点
+        wiki_node: Dict[str, Any] | None = None
+        wiki_node_token = ctx.wiki_node_token
+        wiki_space_id = ctx.wiki_space_id
 
-        if wiki_node:
+        if wiki_node_token:
             # === 知识库路径 ===
-            space_id = str(wiki_node.get("space_id") or "")
-            parent_node_token = str(wiki_node.get("node_token") or "")
-            if not space_id or not parent_node_token:
-                raise RuntimeError(f"Invalid wiki node info: {wiki_node}")
+            if not wiki_space_id:
+                wiki_node = await self._feishu.get_wiki_node_by_token(node_token=wiki_node_token)
+                wiki_space_id = str(wiki_node.get("space_id") or "")
+            if not wiki_space_id:
+                raise RuntimeError("Missing wiki_space_id (cannot create child node)")
 
             child_node = await self._feishu.create_wiki_child_doc(
-                space_id=space_id,
-                parent_node_token=parent_node_token,
+                space_id=wiki_space_id,
+                parent_node_token=wiki_node_token,
                 title=title,
                 obj_type="docx",
                 node_type="origin",
@@ -93,8 +96,10 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
             child_doc_url=child_doc_url,
             metadata={
                 "output": "feishu_child_doc",
-                "source_is_wiki": bool(wiki_node),
+                "source_is_wiki": bool(wiki_node_token),
                 "wiki_node": wiki_node,
+                "wiki_node_token": wiki_node_token,
+                "wiki_space_id": wiki_space_id,
             },
         )
 

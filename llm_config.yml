@@ -1,8 +1,22 @@
+# providers:
+#   primary_gemini:
+#     type: "openai-compatible"
+#     base_url: "https://zjuapi.com/v1"
+#     model: "gemini-3-pro-preview"
+#     api_key_env: "GEMINI_API_KEY"
+
+#   no_thinking_gemini:
+#     type: "openai-compatible"
+#     base_url: "https://zjuapi.com/v1"
+#     model: "gemini-2.5-flash-nothinking"
+#     api_key_env: "GEMINI_API_KEY"
+
+
 providers:
   primary_gemini:
     type: "openai-compatible"
     base_url: "https://zjuapi.com/v1"
-    model: "gemini-3-pro-preview"
+    model: "gemini-2.5-flash-nothinking"
     api_key_env: "GEMINI_API_KEY"
 
   no_thinking_gemini:
@@ -10,7 +24,6 @@ providers:
     base_url: "https://zjuapi.com/v1"
     model: "gemini-2.5-flash-nothinking"
     api_key_env: "GEMINI_API_KEY"
-
 
 chains:
   default:

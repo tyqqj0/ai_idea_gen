@@ -29,6 +29,8 @@ class AddonProcessRequest(BaseModel):
     user_id: str = Field(..., description="触发用户 open_id")
     mode: str = Field(default="idea_expand", description="处理模式")
     trigger_source: Optional[str] = Field(default=None, description="触发来源")
+    wiki_node_token: Optional[str] = Field(default=None, description="（可选）知识库父节点 node_token")
+    wiki_space_id: Optional[str] = Field(default=None, description="（可选）知识库 space_id")
 
 
 class AddonProcessAccepted(BaseModel):
@@ -86,6 +88,8 @@ async def trigger_process(payload: AddonProcessRequest) -> AddonProcessAccepted:
         user_id=payload.user_id,
         mode=payload.mode,
         trigger_source=payload.trigger_source or "docs_addon",
+        wiki_node_token=payload.wiki_node_token,
+        wiki_space_id=payload.wiki_space_id,
     )
 
     task_id = await trigger_service.trigger(ctx=ctx)
@@ -122,9 +126,11 @@ class FeishuEventCallback(BaseModel):
     """
 
     challenge: Optional[str] = None
-    schema: Optional[str] = None
+    schema_: Optional[str] = Field(default=None, alias="schema")
     header: Optional[Dict[str, Any]] = None
     event: Optional[Dict[str, Any]] = None
+
+    model_config = {"populate_by_name": True}
 
 
 @router.post("/feishu/event", summary="飞书事件订阅回调（最小骨架）")

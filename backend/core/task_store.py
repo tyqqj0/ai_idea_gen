@@ -42,7 +42,7 @@ class TaskStore:
             }
             if idempotency_key:
                 self._idempotency[idempotency_key] = task_id
-            return task_id
+        return task_id
 
     async def update_progress(
         self,

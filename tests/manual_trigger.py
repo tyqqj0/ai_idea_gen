@@ -53,6 +53,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="触发来源标记，便于排查日志",
     )
     parser.add_argument(
+        "--wiki-node-token",
+        help="（可选）知识库父节点 node_token（wikcn...），用于在知识库下创建子节点",
+    )
+    parser.add_argument(
+        "--wiki-space-id",
+        help="（可选）知识库 space_id（若不提供，后端会尝试根据 node_token 查询，需要 wiki:node:read 权限）",
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=30.0,
@@ -169,6 +177,8 @@ async def main() -> None:
         "user_id": args.user_id,
         "mode": args.mode,
         "trigger_source": args.trigger_source,
+        "wiki_node_token": args.wiki_node_token,
+        "wiki_space_id": args.wiki_space_id,
     }
 
     logging.info("请求地址: %s", args.endpoint)
