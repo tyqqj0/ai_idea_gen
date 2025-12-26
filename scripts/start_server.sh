@@ -71,7 +71,8 @@ if [[ -n "${PIDS}" ]]; then
   fi
 fi
 
-exec uvicorn backend.main:app --reload --host 0.0.0.0 --port "${PORT}" "${UVICORN_EXTRA_ARGS[@]}"
+# 设置日志级别为 INFO，确保能看到 FeishuClient 的调试日志
+exec uvicorn backend.main:app --reload --host 0.0.0.0 --port "${PORT}" --log-level info "${UVICORN_EXTRA_ARGS[@]}"
 
 
 

@@ -227,6 +227,25 @@ class FeishuClient:
         token = await self.get_tenant_access_token()
         headers = {"Authorization": f"Bearer {token}"}
 
+        # 调试日志：打印实际发送的请求信息
+        full_url = f"{self.FEISHU_HOST}{path}"
+        if params:
+            # 简单拼接 query string（实际 httpx 会处理）
+            query_str = "&".join(f"{k}={v}" for k, v in params.items())
+            full_url = f"{full_url}?{query_str}"
+        
+        # Token 打码（只显示前4后4）
+        masked_token = f"{token[:4]}...{token[-4:]}" if len(token) > 8 else "***"
+        masked_headers = {k: (masked_token if k == "Authorization" else v) for k, v in headers.items()}
+        
+        logger.info(
+            "Feishu API Request: %s %s\n  Headers: %s\n  Body: %s",
+            method,
+            full_url,
+            masked_headers,
+            json if json else (params if params else None),
+        )
+
         resp = await self._client.request(
             method,
             path,
@@ -234,16 +253,52 @@ class FeishuClient:
             json=json,
             headers=headers,
         )
+        
+        # 调试日志：打印响应状态和关键字段
+        logger.info(
+            "Feishu API Response: %s %s -> status=%s",
+            method,
+            path,
+            resp.status_code,
+        )
         try:
             data = resp.json()
         except JSONDecodeError:
             # 针对非 JSON 响应（如 404 page not found, 502 Bad Gateway 等）做容错处理
+            logger.error(
+                "Feishu API non-JSON response: %s %s -> status=%s, body=%s",
+                method,
+                path,
+                resp.status_code,
+                resp.text[:200],
+            )
             raise FeishuAPIError(
                 f"Feishu API returned non-JSON response. Status: {resp.status_code}, Body: {resp.text[:200]}",
                 status_code=resp.status_code,
             )
 
-        if resp.status_code != 200 or data.get("code") != 0:
+        # 调试日志：打印响应体关键字段
+        resp_code = data.get("code")
+        resp_msg = data.get("msg")
+        logger.info(
+            "Feishu API Response body: %s %s -> code=%s, msg=%s",
+            method,
+            path,
+            resp_code,
+            resp_msg,
+        )
+
+        if resp.status_code != 200 or resp_code != 0:
+            # 错误时打印完整响应（便于调试）
+            logger.error(
+                "Feishu API error: %s %s -> status=%s, code=%s, msg=%s, full_data=%s",
+                method,
+                path,
+                resp.status_code,
+                resp_code,
+                resp_msg,
+                data,
+            )
             raise FeishuAPIError(
                 f"Feishu API error path={path}, status={resp.status_code}, data={data}",
                 status_code=resp.status_code,

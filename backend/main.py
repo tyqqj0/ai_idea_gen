@@ -1,9 +1,17 @@
+import logging
+
 from fastapi import FastAPI
 
 from backend.config import get_settings
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# 配置日志级别（确保能看到 INFO 级别的调试日志）
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
 
 from backend.api.routes import router as api_router
 
