@@ -16,7 +16,7 @@ from backend.core.manager import (
 )
 from backend.core.workflow_loader import build_default_workflow_registry, load_workflow_registry
 from backend.core.task_store import TaskStatus, TaskStore
-from backend.services.feishu import FeishuClient
+from backend.services.feishu import FeishuClient, FeishuAPIError
 from backend.services.triggers.service import TriggerService
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,14 @@ router = APIRouter()
 
 
 class AddonProcessRequest(BaseModel):
-    doc_token: str = Field(..., description="飞书文档 token")
+    token: Optional[str] = Field(
+        default=None,
+        description="统一入口：可传 doc_token（doccn/doxc）或 wiki node_token（wikcn...）。不传则使用 doc_token 字段。",
+    )
+    doc_token: Optional[str] = Field(
+        default=None,
+        description="飞书文档 token（doccn/doxc，兼容旧版；若提供 token 则优先用 token）",
+    )
     user_id: str = Field(..., description="触发用户 open_id")
     mode: str = Field(default="idea_expand", description="处理模式")
     trigger_source: Optional[str] = Field(default=None, description="触发来源")
@@ -83,13 +90,15 @@ async def trigger_process(payload: AddonProcessRequest) -> AddonProcessAccepted:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    doc_token, wiki_node_token, wiki_space_id = await _resolve_tokens(payload)
+
     ctx = ProcessContext(
-        doc_token=payload.doc_token,
+        doc_token=doc_token,
         user_id=payload.user_id,
         mode=payload.mode,
         trigger_source=payload.trigger_source or "docs_addon",
-        wiki_node_token=payload.wiki_node_token,
-        wiki_space_id=payload.wiki_space_id,
+        wiki_node_token=wiki_node_token,
+        wiki_space_id=wiki_space_id,
     )
 
     task_id = await trigger_service.trigger(ctx=ctx)
@@ -116,6 +125,47 @@ async def get_task_status(task_id: str) -> TaskStatusResponse:
         created_at=task.get("created_at", 0.0),
         updated_at=task.get("updated_at"),
     )
+
+
+async def _resolve_tokens(payload: AddonProcessRequest) -> tuple[str, Optional[str], Optional[str]]:
+    """
+    统一解析入口 Token：
+    - 如果提供 wiki_node_token/space_id，则直接使用（doc_token 需传 doc 实体 ID）
+    - 如果提供 token（可能是 node_token 或 doc_token），尝试：
+        1) 若 wiki_node_token 未提供，则用 token 先尝试查 wiki node（成功则得到 doc_token/space_id）
+        2) 若 wiki 查失败，则把 token 当作 doc_token
+    """
+    token = payload.token or payload.doc_token
+    if not token:
+        raise HTTPException(status_code=400, detail="token 或 doc_token 必须提供")
+
+    # 若前端已显式提供 wiki_node_token/space_id，则直接信任并使用传入的 doc_token（若空则回退 token）
+    if payload.wiki_node_token or payload.wiki_space_id:
+        return (
+            payload.doc_token or token,
+            payload.wiki_node_token,
+            payload.wiki_space_id,
+        )
+
+    # 尝试将 token 视为 node_token，查询 wiki 信息；失败则降级为 doc_token
+    feishu = trigger_service._pm._feishu  # type: ignore[attr-defined]
+    try:
+        wiki_node = await feishu.get_wiki_node_by_token(node_token=token)
+        doc_token = (
+            wiki_node.get("obj_token")
+            or wiki_node.get("objToken")
+            or wiki_node.get("document_id")
+            or wiki_node.get("doc_token")
+        )
+        space_id = wiki_node.get("space_id")
+        if doc_token:
+            return str(doc_token), token, str(space_id) if space_id else None
+    except FeishuAPIError:
+        # 不是 wiki 节点或无权限，则降级为普通 doc_token
+        pass
+
+    # 默认当作 doc_token（云盘或普通文档）
+    return token, None, None
 
 
 class FeishuEventCallback(BaseModel):

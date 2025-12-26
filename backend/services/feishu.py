@@ -52,11 +52,20 @@ class FeishuClient:
                 "app_secret": self.settings.FEISHU_APP_SECRET,
             }
 
+            logger.info(
+                "Requesting tenant_access_token with app_id=%s (secret masked)",
+                self.settings.FEISHU_APP_ID,
+            )
             resp = await self._client.post(
                 "/open-apis/auth/v3/tenant_access_token/internal", json=payload
             )
             data = resp.json()
             if resp.status_code != 200 or data.get("code") != 0:
+                logger.error(
+                    "Failed to get tenant_access_token: app_id=%s, response=%s",
+                    self.settings.FEISHU_APP_ID,
+                    data,
+                )
                 raise FeishuAPIError(
                     f"Failed to get tenant_access_token: {data}",
                     status_code=resp.status_code,
@@ -66,7 +75,14 @@ class FeishuClient:
             expire = data.get("expire", 3600)
             self._tenant_token = token
             self._tenant_token_expire_at = time.time() + expire
-            logger.info("Refreshed tenant_access_token, expire_in=%ss", expire)
+            # Token 打码显示（前4后4）
+            masked_token = f"{token[:4]}...{token[-4:]}" if len(token) > 8 else "***"
+            logger.info(
+                "Refreshed tenant_access_token: app_id=%s, token=%s, expire_in=%ss",
+                self.settings.FEISHU_APP_ID,
+                token,
+                expire,
+            )
             return token
 
     async def get_doc_meta(self, doc_token: str) -> Dict[str, Any]:
@@ -111,6 +127,44 @@ class FeishuClient:
         if not node:
             raise FeishuAPIError(f"Unable to parse wiki node from response: {data}")
         return node
+
+    async def resolve_token(
+        self, token: str, *, obj_type: str = "docx"
+    ) -> Dict[str, Optional[str]]:
+        """
+        将任意传入的 token 解析为：
+        - doc_token: 文档实体 ID（docx 对应的 obj_token）
+        - wiki_node_token: 如果是知识库节点则返回
+        - wiki_space_id: 如果是知识库节点则返回
+
+        逻辑：
+        1) 尝试按 wiki node 解析（需要 wiki:node:read 权限；若失败则忽略）
+        2) 失败则视为普通 doc_token
+        """
+        try:
+            node = await self.get_wiki_node_by_token(node_token=token)
+            doc_token = (
+                node.get("obj_token")
+                or node.get("objToken")
+                or node.get("document_id")
+                or node.get("doc_token")
+            )
+            space_id = node.get("space_id") or node.get("spaceId")
+            if doc_token:
+                return {
+                    "doc_token": str(doc_token),
+                    "wiki_node_token": token,
+                    "wiki_space_id": str(space_id) if space_id else None,
+                }
+        except FeishuAPIError:
+            # 不是 wiki 节点或无权限读取，降级为普通 doc token
+            pass
+
+        return {
+            "doc_token": token,
+            "wiki_node_token": None,
+            "wiki_space_id": None,
+        }
 
     async def create_wiki_child_doc(
         self,
@@ -185,14 +239,40 @@ class FeishuClient:
         }
         await self.append_blocks(doc_token, [block])
 
-    async def append_blocks(self, doc_token: str, blocks: List[Dict[str, Any]]) -> None:
+    async def append_blocks(
+        self,
+        doc_token: str,
+        blocks: List[Dict[str, Any]],
+        *,
+        max_retries: int = 3,
+        retry_interval_s: float = 5.0,
+    ) -> None:
         """
-        向指定文档追加 blocks。
+        向指定文档追加 blocks；若遇到 404（新建文档可能短暂不可见）将自动重试。
         """
         payload = {"blocks": blocks}
-        await self._request(
-            "POST", f"/open-apis/docx/v1/documents/{doc_token}/blocks", json=payload
-        )
+        for attempt in range(max_retries):
+            try:
+                await self._request(
+                    "POST",
+                    f"/open-apis/docx/v1/documents/{doc_token}/blocks",
+                    json=payload,
+                )
+                return
+            except FeishuAPIError as exc:
+                is_last = attempt >= max_retries - 1
+                if exc.status_code == 404 and not is_last:
+                    logger.warning(
+                        "append_blocks got 404, doc_token=%s, attempt=%d/%d; "
+                        "retrying in %.1fs",
+                        doc_token,
+                        attempt + 1,
+                        max_retries,
+                        retry_interval_s,
+                    )
+                    await asyncio.sleep(retry_interval_s)
+                    continue
+                raise
 
     async def send_card(
         self,
@@ -225,7 +305,16 @@ class FeishuClient:
         json: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         token = await self.get_tenant_access_token()
+        # Token 打码（用于日志）
+        masked_token = f"{token[:4]}...{token[-4:]}" if len(token) > 8 else "***"
         headers = {"Authorization": f"Bearer {token}"}
+        logger.debug(
+            "Using tenant_access_token=%s (app_id=%s) for %s %s",
+            masked_token,
+            self.settings.FEISHU_APP_ID,
+            method,
+            path,
+        )
 
         # 调试日志：打印实际发送的请求信息
         full_url = f"{self.FEISHU_HOST}{path}"

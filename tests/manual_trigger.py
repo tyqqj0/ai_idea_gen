@@ -35,7 +35,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_ENDPOINT,
         help=f"接口地址，默认 {DEFAULT_ENDPOINT}",
     )
-    parser.add_argument("--doc-token", required=True, help="文档 doc_token")
+    parser.add_argument(
+        "--token",
+        help="统一入口：doc_token（doccn/doxc）或 wiki node_token（wikcn...）。若不提供则使用 --doc-token。",
+    )
+    parser.add_argument("--doc-token", help="文档 doc_token（兼容旧版）")
     parser.add_argument(
         "--user-id",
         default="test_user",
@@ -173,6 +177,7 @@ async def main() -> None:
     args = parser.parse_args()
 
     payload = {
+        "token": args.token,
         "doc_token": args.doc_token,
         "user_id": args.user_id,
         "mode": args.mode,
