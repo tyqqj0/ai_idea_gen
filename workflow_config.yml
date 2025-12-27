@@ -3,13 +3,13 @@ workflows:
     processor: "idea_expander"
     chain: "idea_expand"
     output: "feishu_child_doc"
-    notify_user: true
+    notify_user: false
 
   research:
     processor: "research"
     chain: "research"
     output: "feishu_child_doc"
-    notify_user: true
+    notify_user: false
 
   # 示例：将结果推送到外部 webhook（需要在 .env 配置 WEBHOOK_OUTPUT_URL）
   # research_webhook:

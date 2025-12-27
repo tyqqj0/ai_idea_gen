@@ -215,13 +215,71 @@ class FeishuClient:
             raise FeishuAPIError("Unable to parse child document token from response")
         return token
 
+    async def convert_markdown_to_blocks(
+        self, content_md: str, *, content_type: str = "markdown"
+    ) -> List[Dict[str, Any]]:
+        """
+        使用飞书官方接口将 Markdown 文本转换为 blocks 结构。
+        正式路径：/open-apis/docx/v1/documents/blocks/convert
+        """
+        payload = {"content": content_md, "content_type": content_type}
+        data = await self._request(
+            "POST", "/open-apis/docx/v1/documents/blocks/convert", json=payload
+        )
+        blocks = data.get("data", {}).get("blocks")
+        if not isinstance(blocks, list) or not blocks:
+            raise FeishuAPIError(f"convert_to_blocks returned invalid blocks: {data}")
+        # 飞书要求表格的 merge_info 只读，需移除
+        for blk in blocks:
+            if blk.get("block_type") == "table":
+                blk.pop("merge_info", None)
+        return blocks
+
     async def write_doc_content(self, doc_token: str, content_md: str) -> None:
         """
-        将 Markdown 内容写入文档。当前实现将整段内容写入一个 markdown block。
+        将 Markdown 内容写入文档，带防护与回退：
+        1) 长度过长先截断（避免超限）
+        2) 优先：convert -> descendant 批量写入
+        3) 失败或块数过多时，回退为单一 markdown block（最保守）
         """
+        # 1) 长度截断（飞书有长度与块数限制，这里做上限保护）
+        max_md_len = 60000
+        truncated = False
+        content_to_use = content_md
+        if len(content_md) > max_md_len:
+            content_to_use = content_md[:max_md_len] + "\n\n（内容已截断，长度超出上限）"
+            truncated = True
+            logger.warning(
+                "Markdown length exceeded %d chars, truncated for doc=%s", max_md_len, doc_token
+            )
+
+        blocks: Optional[List[Dict[str, Any]]] = None
+
+        # 2) 优先走 convert -> descendant
+        try:
+            blocks = await self.convert_markdown_to_blocks(content_to_use)
+            if len(blocks) > 1000:
+                logger.warning(
+                    "Converted blocks count %d exceeds 1000, fallback to markdown block", len(blocks)
+                )
+                blocks = None
+        except FeishuAPIError as exc:
+            logger.warning("convert_markdown_to_blocks failed, fallback to markdown block: %s", exc)
+            blocks = None
+
+        if blocks:
+            try:
+                await self.add_blocks_descendant(doc_token, blocks)
+                return
+            except FeishuAPIError as exc:
+                logger.warning(
+                    "add_blocks_descendant failed, fallback to markdown block: %s", exc
+                )
+
+        # 3) 回退方案：写一个 markdown 块，保证最小可用
         markdown_block = {
             "block_type": "markdown",
-            "markdown": {"content": content_md},
+            "markdown": {"content": content_to_use},
         }
         await self.append_blocks(doc_token, [markdown_block])
 
@@ -229,15 +287,10 @@ class FeishuClient:
         self, doc_token: str, child_title: str, child_url: str
     ) -> None:
         """
-        在原文档末尾追加一个带链接的引用块。
+        在原文档末尾追加一个带链接的引用块（走 Markdown 转换，以保证结构正确）。
         """
-        block = {
-            "block_type": "markdown",
-            "markdown": {
-                "content": f"[{child_title}]({child_url})",
-            },
-        }
-        await self.append_blocks(doc_token, [block])
+        blocks = await self.convert_markdown_to_blocks(f"[{child_title}]({child_url})")
+        await self.add_blocks_descendant(doc_token, blocks)
 
     async def append_blocks(
         self,
@@ -273,6 +326,119 @@ class FeishuClient:
                     await asyncio.sleep(retry_interval_s)
                     continue
                 raise
+
+    async def add_blocks_descendant(
+        self,
+        doc_token: str,
+        blocks: List[Dict[str, Any]],
+        *,
+        parent_block_id: Optional[str] = None,
+        max_retries: int = 3,
+        retry_interval_s: float = 5.0,
+        chunk_size: int = 500,  # 官方上限 1000，这里保守 500 以防超限
+    ) -> None:
+        """
+        使用“创建嵌套块”接口批量插入含父子关系的 blocks。
+        - 接口：/open-apis/docx/v1/documents/{doc_id}/blocks/{block_id}/descendant
+        - 要求：children_id 为根级块的临时 ID 列表；descendants 为含父子关系的块列表
+        - 限制：children_id/descendants 最多 1000，这里按 500 分批发送
+        """
+        parent_id = parent_block_id or doc_token
+        
+        # 规范化 blocks：确保所有块都有 block_id 和正确的 parent_id
+        normalized_blocks: List[Dict[str, Any]] = []
+        for blk in blocks:
+            blk_copy = dict(blk)
+            # 确保有 block_id（convert 接口应该已经提供了）
+            if not blk_copy.get("block_id"):
+                raise FeishuAPIError(f"Block missing block_id: {blk_copy}")
+            # 规范 parent_id：如果 parent_id 为空或空字符串，设置为目标父块（顶层块）
+            blk_parent_id = blk_copy.get("parent_id")
+            if not blk_parent_id or blk_parent_id == "":
+                blk_copy["parent_id"] = parent_id
+            # 清理只读字段（表格 merge_info 已在转换时移除，这里防御性再删）
+            if blk_copy.get("block_type") == "table" or isinstance(blk_copy.get("table"), dict):
+                blk_copy.pop("merge_info", None)
+                if isinstance(blk_copy.get("table"), dict):
+                    blk_copy["table"].pop("merge_info", None)
+            # 注意：descendant 接口要求扁平化结构，每个块通过 parent_id 表示父子关系
+            # convert 接口返回的 blocks 应该已经是扁平化的，不需要 children 字段
+            # 但为了安全，我们保留原始结构，只确保 parent_id 正确
+            normalized_blocks.append(blk_copy)
+
+        async def _post_once(batch: List[Dict[str, Any]]) -> None:
+            # children_id：只包含 parent_id == parent_id 的块（第一级子块）
+            children_id = [
+                b.get("block_id") for b in batch if b.get("parent_id") == parent_id and b.get("block_id")
+            ]
+            if not children_id:
+                raise FeishuAPIError(
+                    f"No top-level blocks found in batch (parent_id={parent_id}, batch_size={len(batch)})"
+                )
+            # 验证：确保 children_id 中的所有 ID 都在 descendants 中
+            batch_block_ids = {b.get("block_id") for b in batch if b.get("block_id")}
+            missing_ids = set(children_id) - batch_block_ids
+            if missing_ids:
+                raise FeishuAPIError(
+                    f"children_id contains IDs not in descendants: {missing_ids}"
+                )
+            # 验证：确保所有块的 parent_id 都指向有效的块（在 batch 中或等于 parent_id）
+            valid_parent_ids = batch_block_ids | {parent_id}
+            invalid_blocks = [
+                b for b in batch
+                if b.get("parent_id") and b.get("parent_id") not in valid_parent_ids
+            ]
+            if invalid_blocks:
+                invalid_parent_ids = {b.get("parent_id") for b in invalid_blocks}
+                logger.warning(
+                    "Some blocks have invalid parent_id (not in batch or parent): %s",
+                    invalid_parent_ids,
+                )
+                # 将无效的 parent_id 重置为 parent_id（防御性处理）
+                for blk in invalid_blocks:
+                    blk["parent_id"] = parent_id
+                    # 如果这个块之前不在 children_id 中，现在应该加入（因为 parent_id 变成了 parent_id）
+                    if blk.get("block_id") not in children_id:
+                        children_id.append(blk.get("block_id"))
+            payload = {
+                "children_id": children_id,
+                "descendants": batch,
+            }
+            logger.debug(
+                "add_blocks_descendant batch: parent_id=%s, children_id_count=%d, descendants_count=%d",
+                parent_id,
+                len(children_id),
+                len(batch),
+            )
+            for attempt in range(max_retries):
+                try:
+                    await self._request(
+                        "POST",
+                        f"/open-apis/docx/v1/documents/{doc_token}/blocks/{parent_id}/descendant",
+                        json=payload,
+                    )
+                    return
+                except FeishuAPIError as exc:
+                    is_last = attempt >= max_retries - 1
+                    if exc.status_code in (404, 429, 99991400) and not is_last:
+                        logger.warning(
+                            "add_blocks_descendant retry doc=%s parent=%s attempt=%d/%d "
+                            "(status=%s) in %.1fs",
+                            doc_token,
+                            parent_id,
+                            attempt + 1,
+                            max_retries,
+                            exc.status_code,
+                            retry_interval_s,
+                        )
+                        await asyncio.sleep(retry_interval_s)
+                        continue
+                    raise
+
+        # 分批（<=500）顺序写入
+        for idx in range(0, len(normalized_blocks), chunk_size):
+            batch = normalized_blocks[idx : idx + chunk_size]
+            await _post_once(batch)
 
     async def send_card(
         self,
