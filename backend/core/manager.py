@@ -102,7 +102,7 @@ class ProcessManager:
             doc_content=doc_content,
             doc_title=doc_title,
             chain=workflow.chain,
-            context={"trigger_source": ctx.trigger_source},
+            context={"trigger_source": ctx.trigger_source, "report_progress": report},
         )
 
         await report("output", 80, "输出落地（写入/推送）")

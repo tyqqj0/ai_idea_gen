@@ -25,6 +25,14 @@ providers:
     model: "gemini-2.5-flash-nothinking"
     api_key_env: "GEMINI_API_KEY"
 
+  deep_research_zju:
+    type: "openai-compatible"
+    # 平台转发的 Deep Research 接口根地址，注意不要包含 /chat/completions
+    base_url: "https://zjuapi.com/v1"
+    # 请按实际模型名填写。若平台要求特定名称，可在此替换。
+    model: "gemini-3-pro-deepsearch"
+    api_key_env: "DEEP_RESEARCH_API_KEY"
+
 chains:
   default:
     - provider: "no_thinking_gemini"
@@ -33,8 +41,15 @@ chains:
   idea_expand:
     - provider: "primary_gemini"
 
-  research:
+  # Research 流程：先 refine，再调用深度调研模型（长时任务）
+  research_refine:
     - provider: "primary_gemini"
+      timeout_s: 120
+
+  research_deep:
+    - provider: "deep_research_zju"
+      # 深度调研耗时较长，放宽超时
+      timeout_s: 1800
 
 global:
   max_retries_per_provider: 1
