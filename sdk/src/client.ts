@@ -26,6 +26,7 @@ export class FeishuAIDocSDK {
      */
     public async trigger(options: TriggerOptions): Promise<AddonProcessAccepted> {
         const payload: AddonProcessRequest = {
+      token: options.token ?? null,
             doc_token: options.docToken,
             user_id: options.userId,
             mode: options.mode,

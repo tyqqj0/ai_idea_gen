@@ -23,6 +23,9 @@ const sdk = new FeishuAIDocSDK({
 
 // 触发并等待结果（内部自动轮询任务）
 const res = await sdk.generate({
+  // 如果是知识库节点，可直接传 token（wikcn...）
+  token: "wikcnxxxx",
+  // 或者传文档 doc_token（doccn/doxc）
   docToken: "doxcnxxxx",
   userId: "ou_xxx",
   mode: "idea_expand",

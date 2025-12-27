@@ -1,6 +1,11 @@
 export type Mode = string;
 
 export interface AddonProcessRequest {
+  /**
+   * 统一入口：可传 doc_token（doccn/doxc）或 wiki node_token（wikcn...）
+   * 若同时传 token 与 doc_token，则后端优先使用 token。
+   */
+  token?: string | null;
   doc_token: string;
   user_id: string;
   mode?: Mode;
@@ -58,6 +63,11 @@ export interface SDKConfig {
 }
 
 export interface TriggerOptions {
+  /**
+   * 可选：统一入口 token（doc_token 或 wiki node_token）
+   * 若不传则使用 docToken
+   */
+  token?: string;
   docToken: string;
   userId: string;
   mode?: Mode;
