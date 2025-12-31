@@ -82,13 +82,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--poll-interval",
         type=float,
         default=2.0,
-        help="任务状态轮询间隔（秒）",
+        help="任务状态轮询间隔（秒），research 建议 10-30s",
     )
     parser.add_argument(
         "--poll-timeout",
         type=float,
         default=180.0,
-        help="任务状态最大等待时间（秒）",
+        help="任务状态最大等待时间（秒），research 建议 1800s+",
     )
     parser.add_argument(
         "--no-wait",
@@ -175,6 +175,12 @@ async def _poll_task_status(
 async def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
+
+    # 如果是 research 且用户未自定义轮询参数，自动放宽：interval=15s, timeout=2400s
+    if args.mode == "research" and args.poll_interval == 2.0 and args.poll_timeout == 180.0:
+        args.poll_interval = 15.0
+        args.poll_timeout = 2400.0
+        logging.info("检测到 mode=research，自动调整轮询 interval=15s, timeout=2400s")
 
     payload = {
         "token": args.token,

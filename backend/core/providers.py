@@ -36,9 +36,9 @@ class LLMProvider(ABC):
                 f"Missing API key for provider {name}, env={config.api_key_env}"
             )
 
-        # 这里不要用过小的 httpx 超时（否则会抢在上层链路超时之前触发 ReadTimeout）。
-        # 统一由上层 LLMClient 的 asyncio.wait_for(step.timeout_s/overall_timeout_s) 控制超时更清晰。
-        self._client = httpx.AsyncClient(base_url=config.base_url, timeout=120.0)
+        # 长时任务（如 deep research）可能耗时 20 分钟以上，不在 httpx 层做短超时限制，
+        # 由上层 LLMClient 的 asyncio.wait_for(step.timeout_s / overall_timeout_s) 统一控制。
+        self._client = httpx.AsyncClient(base_url=config.base_url, timeout=None)
         self._api_key = api_key
 
     @abstractmethod

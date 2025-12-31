@@ -281,7 +281,7 @@ class FeishuClient:
             "block_type": "markdown",
             "markdown": {"content": content_to_use},
         }
-        await self.append_blocks(doc_token, [markdown_block])
+        await self.add_blocks_descendant(doc_token, [markdown_block])
 
     async def append_reference_block(
         self, doc_token: str, child_title: str, child_url: str
@@ -299,33 +299,48 @@ class FeishuClient:
         *,
         max_retries: int = 3,
         retry_interval_s: float = 5.0,
+        chunk_size: int = 50,
     ) -> None:
         """
-        向指定文档追加 blocks；若遇到 404（新建文档可能短暂不可见）将自动重试。
+        兼容老接口：/open-apis/docx/v1/documents/{doc_id}/blocks
+        - 单次最多 50 条，这里分批
+        - 主要用于简单 markdown 回退（无嵌套需求）
         """
-        payload = {"blocks": blocks}
-        for attempt in range(max_retries):
-            try:
-                await self._request(
-                    "POST",
-                    f"/open-apis/docx/v1/documents/{doc_token}/blocks",
-                    json=payload,
-                )
-                return
-            except FeishuAPIError as exc:
-                is_last = attempt >= max_retries - 1
-                if exc.status_code == 404 and not is_last:
-                    logger.warning(
-                        "append_blocks got 404, doc_token=%s, attempt=%d/%d; "
-                        "retrying in %.1fs",
-                        doc_token,
-                        attempt + 1,
-                        max_retries,
-                        retry_interval_s,
+        # 规范 parent_id，顶层写入页面块（document_id）
+        normalized: List[Dict[str, Any]] = []
+        for blk in blocks:
+            blk_copy = dict(blk)
+            if not blk_copy.get("parent_id"):
+                blk_copy["parent_id"] = doc_token
+            normalized.append(blk_copy)
+
+        async def _post_once(batch: List[Dict[str, Any]]) -> None:
+            payload = {"blocks": batch}
+            for attempt in range(max_retries):
+                try:
+                    await self._request(
+                        "POST",
+                        f"/open-apis/docx/v1/documents/{doc_token}/blocks",
+                        json=payload,
                     )
-                    await asyncio.sleep(retry_interval_s)
-                    continue
-                raise
+                    return
+                except FeishuAPIError as exc:
+                    is_last = attempt >= max_retries - 1
+                    if exc.status_code == 404 and not is_last:
+                        logger.warning(
+                            "append_blocks got 404, doc_token=%s, attempt=%d/%d; retry in %.1fs",
+                            doc_token,
+                            attempt + 1,
+                            max_retries,
+                            retry_interval_s,
+                        )
+                        await asyncio.sleep(retry_interval_s)
+                        continue
+                    raise
+
+        for idx in range(0, len(normalized), chunk_size):
+            batch = normalized[idx : idx + chunk_size]
+            await _post_once(batch)
 
     async def add_blocks_descendant(
         self,
@@ -416,7 +431,7 @@ class FeishuClient:
                         "POST",
                         f"/open-apis/docx/v1/documents/{doc_token}/blocks/{parent_id}/descendant",
                         json=payload,
-                    )
+        )
                     return
                 except FeishuAPIError as exc:
                     is_last = attempt >= max_retries - 1

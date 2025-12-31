@@ -50,7 +50,11 @@ class IdeaExpanderProcessor(BaseDocProcessor):
             title=f"{doc_title} - 思路扩展",
             content_md=completion.strip(),
             summary="扩展思路建议",
-            metadata={"mode": "idea_expand", **(context or {})},
+            metadata={
+                "mode": "idea_expand",
+                "trigger_source": (context or {}).get("trigger_source"),
+                # 仅保留可序列化的字段，避免包含 report_progress 函数
+            },
         )
 
 

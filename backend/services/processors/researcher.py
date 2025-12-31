@@ -98,6 +98,7 @@ class ResearchProcessor(BaseDocProcessor):
             metadata={
                 "mode": "research",
                 "refined_prompt": refined_prompt.strip(),
-                **ctx,
+                "trigger_source": ctx.get("trigger_source"),
+                # 仅保留可序列化的字段，避免包含 report_progress 函数
             },
         )
