@@ -7,11 +7,19 @@ from typing import Any, Dict, TYPE_CHECKING
 from backend.services.feishu import FeishuClient
 from backend.services.outputs.base import BaseOutputHandler, OutputResult, SourceDoc
 from backend.services.processors.base import ProcessorResult
+from backend.services.utils.title_generator import TitleGenerator
 
 if TYPE_CHECKING:
     from backend.core.manager import ProcessContext
+    from backend.core.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
+
+# 模式标签映射（用于文档标题前缀）
+MODE_LABELS = {
+    "idea_expand": "[思路扩展]",
+    "research": "[深度调研]",
+}
 
 
 class FeishuChildDocOutputHandler(BaseOutputHandler):
@@ -19,8 +27,9 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
     默认输出策略：将 ProcessorResult 写入飞书子文档，并在原文档末尾插入引用链接；可选发送通知卡片。
     """
 
-    def __init__(self, *, feishu_client: FeishuClient) -> None:
+    def __init__(self, *, feishu_client: FeishuClient, llm_client: "LLMClient") -> None:
         self._feishu = feishu_client
+        self._title_generator = TitleGenerator(llm_client=llm_client)
 
     async def handle(
         self,
@@ -30,7 +39,24 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
         processor_result: ProcessorResult,
         notify_user: bool = True,
     ) -> OutputResult:
+        # 智能标题生成：如果原标题包含"未命名"，则调用 AI 生成标题
         title = processor_result.title or f"{source_doc.title} - AI 生成"
+        if "未命名" in title:
+            logger.info("检测到未命名文档，启动智能标题生成")
+            try:
+                title = await self._title_generator.generate_title(
+                    content_md=processor_result.content_md,
+                    mode=ctx.mode,
+                    original_doc_title=source_doc.title,
+                )
+                logger.info("智能生成标题: %s", title)
+            except Exception as exc:
+                logger.warning("标题生成失败，使用默认标题: %s", exc)
+                # title 保持原值（fallback 已在 TitleGenerator 内部处理）
+        
+        # 添加模式标签（如 [思路扩展]）
+        title = self._add_mode_label(title, ctx.mode)
+        logger.info("添加标签后的最终标题: %s", title)
 
         # 1) 知识库优先：如果前端/触发方提供了 wiki_node_token，则走知识库创建子节点
         wiki_node: Dict[str, Any] | None = None
@@ -131,6 +157,29 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
     def _build_wiki_url(self, node_token: str) -> str:
         return f"https://feishu.cn/wiki/{node_token}"
 
+    def _add_mode_label(self, title: str, mode: str) -> str:
+        """
+        为标题添加模式标签（前缀方式）
+        
+        Args:
+            title: 原始标题
+            mode: 处理模式
+            
+        Returns:
+            添加标签后的标题
+        """
+        label = MODE_LABELS.get(mode)
+        if not label:
+            # 未知模式，不添加标签
+            return title
+        
+        # 检查标题是否已经包含标签（避免重复添加）
+        if title.startswith(label):
+            return title
+        
+        # 添加标签，标签和标题之间加一个空格
+        return f"{label} {title}"
+    
     def _build_notify_card(
         self, *, ctx: "ProcessContext", child_doc_url: str, summary: str | None
     ) -> Dict[str, Any]:

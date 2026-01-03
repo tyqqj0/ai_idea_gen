@@ -14,9 +14,7 @@ OutputFactory = Callable[[FeishuClient, LLMClient], BaseOutputHandler]
 
 
 def _make_feishu_child_doc_output(feishu: FeishuClient, llm: LLMClient) -> BaseOutputHandler:
-    # llm 当前未使用，但保留参数以统一工厂签名，便于未来扩展
-    _ = llm
-    return FeishuChildDocOutputHandler(feishu_client=feishu)
+    return FeishuChildDocOutputHandler(feishu_client=feishu, llm_client=llm)
 
 
 def _make_webhook_output(feishu: FeishuClient, llm: LLMClient) -> BaseOutputHandler:
