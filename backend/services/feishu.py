@@ -217,46 +217,42 @@ class FeishuClient:
 
     async def convert_markdown_to_blocks(
         self, content_md: str, *, content_type: str = "markdown"
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """
         使用飞书官方接口将 Markdown 文本转换为 blocks 结构。
         正式路径：/open-apis/docx/v1/documents/blocks/convert
+        
+        返回：
+            {
+                "blocks": List[Dict],  # 所有块的列表（无序）
+                "first_level_block_ids": List[str]  # 顶层块的 ID 列表（按 Markdown 原始顺序）
+            }
         """
         payload = {"content": content_md, "content_type": content_type}
         data = await self._request(
             "POST", "/open-apis/docx/v1/documents/blocks/convert", json=payload
         )
         blocks = data.get("data", {}).get("blocks")
+        first_level_block_ids = data.get("data", {}).get("first_level_block_ids", [])
+        
         if not isinstance(blocks, list) or not blocks:
             raise FeishuAPIError(f"convert_to_blocks returned invalid blocks: {data}")
+        
         # 飞书要求表格的 merge_info 只读，需移除
         for blk in blocks:
             if blk.get("block_type") == "table":
                 blk.pop("merge_info", None)
-        # 记录 block 类型分布，便于调试 schema 问题
-        block_types = {blk.get("block_type") for blk in blocks}
+        
         logger.info(
-            "convert_markdown_to_blocks succeeded: blocks=%d, block_types=%s",
+            "convert_markdown_to_blocks succeeded: blocks=%d, first_level_blocks=%d",
             len(blocks),
-            block_types,
+            len(first_level_block_ids),
         )
-        # 打印前几个块的结构信息（不含大段 content），便于调试 schema 问题
-        if blocks and len(blocks) > 0:
-            sample_count = min(3, len(blocks))
-            samples = []
-            for blk in blocks[:sample_count]:
-                samples.append({
-                    "block_id": blk.get("block_id"),
-                    "block_type": blk.get("block_type"),
-                    "parent_id": blk.get("parent_id"),
-                    "has_children": bool(blk.get("children")),
-                })
-            logger.debug(
-                "convert_markdown_to_blocks sample blocks (first %d): %s",
-                sample_count,
-                samples,
-            )
-        return blocks
+        
+        return {
+            "blocks": blocks,
+            "first_level_block_ids": first_level_block_ids,
+        }
 
     async def write_doc_content(self, doc_token: str, content_md: str) -> None:
         """
@@ -276,28 +272,36 @@ class FeishuClient:
                 "Markdown length exceeded %d chars, truncated for doc=%s", max_md_len, doc_token
             )
 
-        blocks: Optional[List[Dict[str, Any]]] = None
+        convert_result: Optional[Dict[str, Any]] = None
 
         # 2) 优先走 convert -> descendant
         try:
-            blocks = await self.convert_markdown_to_blocks(content_to_use)
+            convert_result = await self.convert_markdown_to_blocks(content_to_use)
+            blocks = convert_result["blocks"]
+            first_level_block_ids = convert_result["first_level_block_ids"]
+            
             if len(blocks) > 1000:
                 logger.warning(
-                    "Converted blocks count %d exceeds 1000, fallback to markdown block", len(blocks)
+                    "Converted blocks count %d exceeds 1000, fallback to plain text block", len(blocks)
                 )
-                blocks = None
+                convert_result = None
         except FeishuAPIError as exc:
-            logger.warning("convert_markdown_to_blocks failed, fallback to markdown block: %s", exc)
-            blocks = None
+            logger.warning("convert_markdown_to_blocks failed, fallback to plain text block: %s", exc)
+            convert_result = None
 
-        if blocks:
+        if convert_result:
             try:
                 logger.info(
-                    "write_doc_content: using descendant for doc=%s, blocks=%d",
+                    "write_doc_content: using descendant for doc=%s, blocks=%d, first_level_blocks=%d",
                     doc_token,
-                    len(blocks),
+                    len(convert_result["blocks"]),
+                    len(convert_result["first_level_block_ids"]),
                 )
-                await self.add_blocks_descendant(doc_token, blocks)
+                await self.add_blocks_descendant(
+                    doc_token, 
+                    convert_result["blocks"],
+                    convert_result["first_level_block_ids"],
+                )
                 return
             except FeishuAPIError as exc:
                 logger.warning(
@@ -319,7 +323,7 @@ class FeishuClient:
             },
             "children": [],
         }
-        await self.add_blocks_descendant(doc_token, [fallback_block])
+        await self.add_blocks_descendant(doc_token, [fallback_block], ["plain_text_1"])
 
     async def append_reference_block(
         self, doc_token: str, child_title: str, child_url: str
@@ -327,184 +331,103 @@ class FeishuClient:
         """
         在原文档末尾追加一个带链接的引用块（走 Markdown 转换，以保证结构正确）。
         """
-        blocks = await self.convert_markdown_to_blocks(f"[{child_title}]({child_url})")
-        await self.add_blocks_descendant(doc_token, blocks)
-
-    async def append_blocks(
-        self,
-        doc_token: str,
-        blocks: List[Dict[str, Any]],
-        *,
-        max_retries: int = 3,
-        retry_interval_s: float = 5.0,
-        chunk_size: int = 50,
-    ) -> None:
-        """
-        使用“创建块”接口，将一批简单子块追加到文档根节点。
-        - 接口：/open-apis/docx/v1/documents/{document_id}/blocks/{block_id}/children
-        - 当前用于简单回退场景（无复杂嵌套需求）
-        """
-        normalized: List[Dict[str, Any]] = []
-        for blk in blocks:
-            blk_copy = dict(blk)
-            normalized.append(blk_copy)
-
-        async def _post_once(batch: List[Dict[str, Any]]) -> None:
-            payload = {"children": batch, "index": -1}
-            for attempt in range(max_retries):
-                try:
-                    await self._request(
-                        "POST",
-                        f"/open-apis/docx/v1/documents/{doc_token}/blocks/{doc_token}/children",
-                        json=payload,
-                    )
-                    return
-                except FeishuAPIError as exc:
-                    is_last = attempt >= max_retries - 1
-                    if exc.status_code in (429, 400) and not is_last:
-                        logger.warning(
-                            "append_blocks got %s, doc_token=%s, attempt=%d/%d; retry in %.1fs",
-                            exc.status_code,
-                            doc_token,
-                            attempt + 1,
-                            max_retries,
-                            retry_interval_s,
-                        )
-                        await asyncio.sleep(retry_interval_s)
-                        continue
-                    raise
-
-        for idx in range(0, len(normalized), chunk_size):
-            batch = normalized[idx : idx + chunk_size]
-            await _post_once(batch)
+        convert_result = await self.convert_markdown_to_blocks(f"[{child_title}]({child_url})")
+        await self.add_blocks_descendant(
+            doc_token, 
+            convert_result["blocks"],
+            convert_result["first_level_block_ids"],
+        )
 
     async def add_blocks_descendant(
         self,
         doc_token: str,
         blocks: List[Dict[str, Any]],
+        first_level_block_ids: List[str],
         *,
         parent_block_id: Optional[str] = None,
         max_retries: int = 3,
         retry_interval_s: float = 5.0,
-        chunk_size: int = 500,  # 官方上限 1000，这里保守 500 以防超限
+        chunk_size: int = 500,
     ) -> None:
         """
         使用“创建嵌套块”接口批量插入含父子关系的 blocks。
         - 接口：/open-apis/docx/v1/documents/{doc_id}/blocks/{block_id}/descendant
-        - 要求：children_id 为根级块的临时 ID 列表；descendants 为含父子关系的块列表
+        - 要求：children_id 为根级块的临时 ID 列表（按 Markdown 原始顺序）；descendants 为含父子关系的块列表
         - 限制：children_id/descendants 最多 1000，这里按 500 分批发送
+        
+        Args:
+            doc_token: 文档 ID
+            blocks: 所有块的列表（包括顶层和子块）
+            first_level_block_ids: 顶层块的 ID 列表，按 Markdown 原始顺序排列（由 convert 接口返回）
         """
         parent_id = parent_block_id or doc_token
         
-        # 规范化 blocks：保留 convert 返回的原始结构，只做最小化清理
+        # 验证 blocks 结构
         normalized_blocks: List[Dict[str, Any]] = []
         for blk in blocks:
             blk_copy = dict(blk)
-            # 确保有 block_id（convert 接口应该已经提供了）
             if not blk_copy.get("block_id"):
                 raise FeishuAPIError(f"Block missing block_id: {blk_copy}")
-            # 清理只读字段（表格 merge_info 已在转换时移除，这里防御性再删）
-            if blk_copy.get("block_type") == "table" or isinstance(blk_copy.get("table"), dict):
-                blk_copy.pop("merge_info", None)
-                if isinstance(blk_copy.get("table"), dict):
-                    blk_copy["table"].pop("merge_info", None)
-            # ❗ 关键修改：不再修改 parent_id，保留 convert 返回的原始父子关系
-            # convert 返回的 blocks 已经包含了正确的 parent_id 和 children 关系
             normalized_blocks.append(blk_copy)
-
-        # 推断 children_id：找出所有“不在任何块的 children 里”的块，即为顶层块
-        all_child_ids: Set[str] = set()
-        for b in normalized_blocks:
-            if b.get("children") and isinstance(b["children"], list):
-                all_child_ids.update(b["children"])
-        
-        # 顶层块：block_id 不在任何 children 里
-        top_level_blocks = [
-            b for b in normalized_blocks
-            if b.get("block_id") and b["block_id"] not in all_child_ids
-        ]
         
         logger.info(
-            "add_blocks_descendant: total_blocks=%d, top_level_blocks=%d, all_child_ids=%d",
+            "add_blocks_descendant: total_blocks=%d, first_level_blocks=%d",
             len(normalized_blocks),
-            len(top_level_blocks),
-            len(all_child_ids),
+            len(first_level_block_ids),
         )
 
-        async def _post_once(batch: List[Dict[str, Any]]) -> None:
-            # 推断这个 batch 的 children_id：找出不在任何 children 里的块
-            batch_child_ids: Set[str] = set()
-            for b in batch:
-                if b.get("children") and isinstance(b["children"], list):
-                    batch_child_ids.update(b["children"])
-            
-            children_id = [
-                b.get("block_id") for b in batch
-                if b.get("block_id") and b["block_id"] not in batch_child_ids
-            ]
+        async def _post_once(batch: List[Dict[str, Any]], batch_first_level_ids: List[str]) -> None:
+            # ✅ 直接使用 first_level_block_ids，不再自己推断
+            children_id = batch_first_level_ids
             
             if not children_id:
                 raise FeishuAPIError(
-                    f"No top-level blocks found in batch (batch_size={len(batch)})"
+                    f"No first_level_block_ids provided for batch (batch_size={len(batch)})"
                 )
             
             payload = {
                 "children_id": children_id,
                 "descendants": batch,
             }
-            # 打印结构信息便于调试（不打印完整 content）
-            logger.debug(
-                "add_blocks_descendant batch: parent_id=%s, children_id_count=%d, descendants_count=%d, children_id_sample=%s",
-                parent_id,
-                len(children_id),
-                len(batch),
-                children_id[:3] if len(children_id) > 3 else children_id,
-            )
-            # 打印前几个 descendants 的结构
-            if batch and len(batch) > 0:
-                sample_count = min(3, len(batch))
-                samples = []
-                for blk in batch[:sample_count]:
-                    samples.append({
-                        "block_id": blk.get("block_id"),
-                        "block_type": blk.get("block_type"),
-                        "parent_id": blk.get("parent_id"),
-                        "has_children": bool(blk.get("children")),
-                    })
-                logger.debug(
-                    "add_blocks_descendant sample descendants (first %d): %s",
-                    sample_count,
-                    samples,
-                )
+            
             for attempt in range(max_retries):
                 try:
                     await self._request(
                         "POST",
                         f"/open-apis/docx/v1/documents/{doc_token}/blocks/{parent_id}/descendant",
                         json=payload,
-        )
+                    )
+                    logger.info(
+                        "add_blocks_descendant succeeded: doc=%s, blocks=%d, first_level=%d",
+                        doc_token,
+                        len(batch),
+                        len(children_id),
+                    )
                     return
                 except FeishuAPIError as exc:
+                    # 只对 429（限频）重试，其他错误直接抛出
                     is_last = attempt >= max_retries - 1
-                    if exc.status_code in (404, 429, 99991400) and not is_last:
+                    if exc.status_code == 429 and not is_last:
                         logger.warning(
-                            "add_blocks_descendant retry doc=%s parent=%s attempt=%d/%d "
-                            "(status=%s) in %.1fs",
-                            doc_token,
-                            parent_id,
+                            "add_blocks_descendant rate limited (429), retry %d/%d in %.1fs",
                             attempt + 1,
                             max_retries,
-                            exc.status_code,
                             retry_interval_s,
                         )
                         await asyncio.sleep(retry_interval_s)
                         continue
+                    # 其他错误（404/400/99991400等）直接抛出
                     raise
 
-        # 分批（<=500）顺序写入
+        # 分批（<=500）顺序写入，每批传入对应的 first_level_block_ids
         for idx in range(0, len(normalized_blocks), chunk_size):
             batch = normalized_blocks[idx : idx + chunk_size]
-            await _post_once(batch)
+            # 找出这个 batch 中包含的顶层块 ID（按顺序）
+            batch_block_ids = {b.get("block_id") for b in batch}
+            batch_first_level_ids = [
+                bid for bid in first_level_block_ids if bid in batch_block_ids
+            ]
+            await _post_once(batch, batch_first_level_ids)
 
     async def send_card(
         self,
