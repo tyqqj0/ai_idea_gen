@@ -240,6 +240,22 @@ class FeishuClient:
             len(blocks),
             block_types,
         )
+        # 打印前几个块的结构信息（不含大段 content），便于调试 schema 问题
+        if blocks and len(blocks) > 0:
+            sample_count = min(3, len(blocks))
+            samples = []
+            for blk in blocks[:sample_count]:
+                samples.append({
+                    "block_id": blk.get("block_id"),
+                    "block_type": blk.get("block_type"),
+                    "parent_id": blk.get("parent_id"),
+                    "has_children": bool(blk.get("children")),
+                })
+            logger.debug(
+                "convert_markdown_to_blocks sample blocks (first %d): %s",
+                sample_count,
+                samples,
+            )
         return blocks
 
     async def write_doc_content(self, doc_token: str, content_md: str) -> None:
@@ -380,71 +396,86 @@ class FeishuClient:
         """
         parent_id = parent_block_id or doc_token
         
-        # 规范化 blocks：确保所有块都有 block_id 和正确的 parent_id
+        # 规范化 blocks：保留 convert 返回的原始结构，只做最小化清理
         normalized_blocks: List[Dict[str, Any]] = []
         for blk in blocks:
             blk_copy = dict(blk)
             # 确保有 block_id（convert 接口应该已经提供了）
             if not blk_copy.get("block_id"):
                 raise FeishuAPIError(f"Block missing block_id: {blk_copy}")
-            # 规范 parent_id：如果 parent_id 为空或空字符串，设置为目标父块（顶层块）
-            blk_parent_id = blk_copy.get("parent_id")
-            if not blk_parent_id or blk_parent_id == "":
-                blk_copy["parent_id"] = parent_id
             # 清理只读字段（表格 merge_info 已在转换时移除，这里防御性再删）
             if blk_copy.get("block_type") == "table" or isinstance(blk_copy.get("table"), dict):
                 blk_copy.pop("merge_info", None)
                 if isinstance(blk_copy.get("table"), dict):
                     blk_copy["table"].pop("merge_info", None)
-            # 注意：descendant 接口要求扁平化结构，每个块通过 parent_id 表示父子关系
-            # convert 接口返回的 blocks 应该已经是扁平化的，不需要 children 字段
-            # 但为了安全，我们保留原始结构，只确保 parent_id 正确
+            # ❗ 关键修改：不再修改 parent_id，保留 convert 返回的原始父子关系
+            # convert 返回的 blocks 已经包含了正确的 parent_id 和 children 关系
             normalized_blocks.append(blk_copy)
 
+        # 推断 children_id：找出所有“不在任何块的 children 里”的块，即为顶层块
+        all_child_ids: Set[str] = set()
+        for b in normalized_blocks:
+            if b.get("children") and isinstance(b["children"], list):
+                all_child_ids.update(b["children"])
+        
+        # 顶层块：block_id 不在任何 children 里
+        top_level_blocks = [
+            b for b in normalized_blocks
+            if b.get("block_id") and b["block_id"] not in all_child_ids
+        ]
+        
+        logger.info(
+            "add_blocks_descendant: total_blocks=%d, top_level_blocks=%d, all_child_ids=%d",
+            len(normalized_blocks),
+            len(top_level_blocks),
+            len(all_child_ids),
+        )
+
         async def _post_once(batch: List[Dict[str, Any]]) -> None:
-            # children_id：只包含 parent_id == parent_id 的块（第一级子块）
+            # 推断这个 batch 的 children_id：找出不在任何 children 里的块
+            batch_child_ids: Set[str] = set()
+            for b in batch:
+                if b.get("children") and isinstance(b["children"], list):
+                    batch_child_ids.update(b["children"])
+            
             children_id = [
-                b.get("block_id") for b in batch if b.get("parent_id") == parent_id and b.get("block_id")
+                b.get("block_id") for b in batch
+                if b.get("block_id") and b["block_id"] not in batch_child_ids
             ]
+            
             if not children_id:
                 raise FeishuAPIError(
-                    f"No top-level blocks found in batch (parent_id={parent_id}, batch_size={len(batch)})"
+                    f"No top-level blocks found in batch (batch_size={len(batch)})"
                 )
-            # 验证：确保 children_id 中的所有 ID 都在 descendants 中
-            batch_block_ids = {b.get("block_id") for b in batch if b.get("block_id")}
-            missing_ids = set(children_id) - batch_block_ids
-            if missing_ids:
-                raise FeishuAPIError(
-                    f"children_id contains IDs not in descendants: {missing_ids}"
-                )
-            # 验证：确保所有块的 parent_id 都指向有效的块（在 batch 中或等于 parent_id）
-            valid_parent_ids = batch_block_ids | {parent_id}
-            invalid_blocks = [
-                b for b in batch
-                if b.get("parent_id") and b.get("parent_id") not in valid_parent_ids
-            ]
-            if invalid_blocks:
-                invalid_parent_ids = {b.get("parent_id") for b in invalid_blocks}
-                logger.warning(
-                    "Some blocks have invalid parent_id (not in batch or parent): %s",
-                    invalid_parent_ids,
-                )
-                # 将无效的 parent_id 重置为 parent_id（防御性处理）
-                for blk in invalid_blocks:
-                    blk["parent_id"] = parent_id
-                    # 如果这个块之前不在 children_id 中，现在应该加入（因为 parent_id 变成了 parent_id）
-                    if blk.get("block_id") not in children_id:
-                        children_id.append(blk.get("block_id"))
+            
             payload = {
                 "children_id": children_id,
                 "descendants": batch,
             }
+            # 打印结构信息便于调试（不打印完整 content）
             logger.debug(
-                "add_blocks_descendant batch: parent_id=%s, children_id_count=%d, descendants_count=%d",
+                "add_blocks_descendant batch: parent_id=%s, children_id_count=%d, descendants_count=%d, children_id_sample=%s",
                 parent_id,
                 len(children_id),
                 len(batch),
+                children_id[:3] if len(children_id) > 3 else children_id,
             )
+            # 打印前几个 descendants 的结构
+            if batch and len(batch) > 0:
+                sample_count = min(3, len(batch))
+                samples = []
+                for blk in batch[:sample_count]:
+                    samples.append({
+                        "block_id": blk.get("block_id"),
+                        "block_type": blk.get("block_type"),
+                        "parent_id": blk.get("parent_id"),
+                        "has_children": bool(blk.get("children")),
+                    })
+                logger.debug(
+                    "add_blocks_descendant sample descendants (first %d): %s",
+                    sample_count,
+                    samples,
+                )
             for attempt in range(max_retries):
                 try:
                     await self._request(
