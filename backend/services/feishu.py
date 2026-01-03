@@ -233,6 +233,13 @@ class FeishuClient:
         for blk in blocks:
             if blk.get("block_type") == "table":
                 blk.pop("merge_info", None)
+        # 记录 block 类型分布，便于调试 schema 问题
+        block_types = {blk.get("block_type") for blk in blocks}
+        logger.info(
+            "convert_markdown_to_blocks succeeded: blocks=%d, block_types=%s",
+            len(blocks),
+            block_types,
+        )
         return blocks
 
     async def write_doc_content(self, doc_token: str, content_md: str) -> None:
@@ -269,15 +276,23 @@ class FeishuClient:
 
         if blocks:
             try:
+                logger.info(
+                    "write_doc_content: using descendant for doc=%s, blocks=%d",
+                    doc_token,
+                    len(blocks),
+                )
                 await self.add_blocks_descendant(doc_token, blocks)
                 return
             except FeishuAPIError as exc:
                 logger.warning(
-                    "add_blocks_descendant failed, fallback to markdown block: %s", exc
+                    "add_blocks_descendant failed for doc=%s, fallback to plain text block: %s",
+                    doc_token,
+                    exc,
                 )
 
         # 3) 回退方案：写一个简单的纯文本块（避免手工构造 Markdown 块）
         # 注意：此处不再使用 markdown block_type，而是使用 text block，符合飞书 schema
+        logger.info("write_doc_content: fallback to plain text block for doc=%s", doc_token)
         fallback_block = {
             "block_id": "plain_text_1",
             "block_type": 2,  # 文本块
@@ -513,12 +528,33 @@ class FeishuClient:
         masked_token = f"{token[:4]}...{token[-4:]}" if len(token) > 8 else "***"
         masked_headers = {k: (masked_token if k == "Authorization" else v) for k, v in headers.items()}
         
+        # 构造精简版请求体摘要，避免在日志中输出超长内容
+        body_summary: Dict[str, Any] = {}
+        if json is not None:
+            if isinstance(json, dict):
+                if "content" in json and isinstance(json["content"], str):
+                    body_summary["content_len"] = len(json["content"])
+                if "children" in json and isinstance(json["children"], list):
+                    body_summary["children_count"] = len(json["children"])
+                if "descendants" in json and isinstance(json["descendants"], list):
+                    body_summary["descendants_count"] = len(json["descendants"])
+                # 记录其余关键字段的键名，避免输出大段内容
+                other_keys = [
+                    k for k in json.keys() if k not in ("content", "children", "descendants")
+                ]
+                if other_keys:
+                    body_summary["keys"] = other_keys
+            else:
+                body_summary["json_type"] = str(type(json))
+        elif params is not None:
+            body_summary["params"] = params
+
         logger.info(
-            "Feishu API Request: %s %s\n  Headers: %s\n  Body: %s",
+            "Feishu API Request: %s %s\n  Headers: %s\n  BodySummary: %s",
             method,
             full_url,
             masked_headers,
-            json if json else (params if params else None),
+            body_summary or None,
         )
 
         resp = await self._client.request(
