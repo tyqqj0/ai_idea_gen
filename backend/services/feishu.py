@@ -276,12 +276,19 @@ class FeishuClient:
                     "add_blocks_descendant failed, fallback to markdown block: %s", exc
                 )
 
-        # 3) 回退方案：写一个 markdown 块，保证最小可用
-        markdown_block = {
-            "block_type": "markdown",
-            "markdown": {"content": content_to_use},
+        # 3) 回退方案：写一个简单的纯文本块（避免手工构造 Markdown 块）
+        # 注意：此处不再使用 markdown block_type，而是使用 text block，符合飞书 schema
+        fallback_block = {
+            "block_id": "plain_text_1",
+            "block_type": 2,  # 文本块
+            "text": {
+                "elements": [
+                    {"text_run": {"content": content_to_use}}
+                ]
+            },
+            "children": [],
         }
-        await self.add_blocks_descendant(doc_token, [markdown_block])
+        await self.add_blocks_descendant(doc_token, [fallback_block])
 
     async def append_reference_block(
         self, doc_token: str, child_title: str, child_url: str
@@ -302,33 +309,31 @@ class FeishuClient:
         chunk_size: int = 50,
     ) -> None:
         """
-        兼容老接口：/open-apis/docx/v1/documents/{doc_id}/blocks
-        - 单次最多 50 条，这里分批
-        - 主要用于简单 markdown 回退（无嵌套需求）
+        使用“创建块”接口，将一批简单子块追加到文档根节点。
+        - 接口：/open-apis/docx/v1/documents/{document_id}/blocks/{block_id}/children
+        - 当前用于简单回退场景（无复杂嵌套需求）
         """
-        # 规范 parent_id，顶层写入页面块（document_id）
         normalized: List[Dict[str, Any]] = []
         for blk in blocks:
             blk_copy = dict(blk)
-            if not blk_copy.get("parent_id"):
-                blk_copy["parent_id"] = doc_token
             normalized.append(blk_copy)
 
         async def _post_once(batch: List[Dict[str, Any]]) -> None:
-            payload = {"blocks": batch}
+            payload = {"children": batch, "index": -1}
             for attempt in range(max_retries):
                 try:
                     await self._request(
                         "POST",
-                        f"/open-apis/docx/v1/documents/{doc_token}/blocks",
+                        f"/open-apis/docx/v1/documents/{doc_token}/blocks/{doc_token}/children",
                         json=payload,
                     )
                     return
                 except FeishuAPIError as exc:
                     is_last = attempt >= max_retries - 1
-                    if exc.status_code == 404 and not is_last:
+                    if exc.status_code in (429, 400) and not is_last:
                         logger.warning(
-                            "append_blocks got 404, doc_token=%s, attempt=%d/%d; retry in %.1fs",
+                            "append_blocks got %s, doc_token=%s, attempt=%d/%d; retry in %.1fs",
+                            exc.status_code,
                             doc_token,
                             attempt + 1,
                             max_retries,
