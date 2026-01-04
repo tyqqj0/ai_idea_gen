@@ -111,7 +111,19 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
             await asyncio.sleep(5.0)
 
             # 写入内容（写内容始终走 docx obj_token）
-            await self._feishu.write_doc_content(child_doc_token, processor_result.content_md)
+            # 追加元数据到文档末尾
+            from backend.services.utils.metadata_builder import build_metadata_section
+            
+            # 构建元数据（包含原始内容）
+            metadata = build_metadata_section(
+                mode=ctx.mode,
+                source_title=source_doc.title,
+                source_url=f"https://feishu.cn/wiki/{wiki_node_token}",  # 知识库链接
+                original_content=ctx.original_content,
+                trigger_source=ctx.trigger_source,
+            )
+            final_content = processor_result.content_md + metadata
+            await self._feishu.write_doc_content(child_doc_token, final_content)
         else:
             # === 云盘路径 ===
             # 尽量将子文档创建在原文档所在目录下（folder_token）
@@ -120,7 +132,19 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
                 folder_token=folder_token,
                 title=title,
             )
-            await self._feishu.write_doc_content(child_doc_token, processor_result.content_md)
+            # 追加元数据到文档末尾
+            from backend.services.utils.metadata_builder import build_metadata_section
+            
+            # 构建元数据（包含原始内容）
+            metadata = build_metadata_section(
+                mode=ctx.mode,
+                source_title=source_doc.title,
+                source_url=self._build_doc_url(source_doc.doc_token),
+                original_content=ctx.original_content,
+                trigger_source=ctx.trigger_source,
+            )
+            final_content = processor_result.content_md + metadata
+            await self._feishu.write_doc_content(child_doc_token, final_content)
             child_doc_url = self._build_doc_url(child_doc_token)
 
         # 2) 回链到原文档末尾（原文档可为 Wiki 挂载的 docx，仍可用 docx blocks 接口）

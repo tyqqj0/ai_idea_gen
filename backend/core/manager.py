@@ -24,6 +24,8 @@ class ProcessContext:
     # Wiki（知识库）上下文：如果文档来自知识库，前端/触发方建议传入
     wiki_node_token: str | None = None
     wiki_space_id: str | None = None
+    # 原始文档内容（用于在结果中追加元信息）
+    original_content: str | None = None
 
 
 @dataclass
@@ -96,6 +98,10 @@ class ProcessManager:
 
         await report("fetch_content", 15, "读取文档内容")
         doc_content = await self._feishu.get_doc_content(ctx.doc_token)
+        
+        # 保存原始内容到上下文（用于后续追加元数据）
+        ctx.original_content = doc_content
+        
         processor = workflow.processor_cls(self._llm_client)
         await report("llm", 35, "调用模型生成内容")
         processor_result = await processor.run(
