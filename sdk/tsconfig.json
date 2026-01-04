@@ -6,7 +6,7 @@
             "DOM"
         ],
         "module": "ES2022",
-        "moduleResolution": "Bundler",
+        "moduleResolution": "node16",
         "declaration": true,
         "declarationMap": true,
         "sourceMap": true,
