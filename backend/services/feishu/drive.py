@@ -95,10 +95,14 @@ class FeishuDriveClient:
         
         API: POST /drive/v1/files/create_folder
         参数:
-            - parent_folder_token: 父文件夹 token
+            - parent_folder_token: 父文件夹 token（传空字符串表示在根目录创建）
             - name: 文件夹名称
         
         返回: 新文件夹的 token
+        
+        注意：
+        - 如果同名文件夹已存在，会返回 1062505 错误
+        - 调用方需要捕获此错误并处理（如使用现有文件夹或创建带编号的新名称）
         """
         payload = {
             "folder_token": parent_folder_token,
@@ -115,7 +119,7 @@ class FeishuDriveClient:
         
         logger.info(
             "create_folder succeeded: parent=%s, name=%s, new_folder_token=%s",
-            parent_folder_token,
+            parent_folder_token or "(root)",
             name,
             folder_token,
         )

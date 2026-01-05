@@ -62,6 +62,12 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
         wiki_node: Dict[str, Any] | None = None
         wiki_node_token = ctx.wiki_node_token
         wiki_space_id = ctx.wiki_space_id
+        
+        # 云盘场景变量（用于返回结果）
+        folder_token: str | None = None
+        folder_name: str | None = None
+        backlink_success: bool = False
+        backlink_error: str | None = None
 
         if wiki_node_token:
             # === 知识库路径 ===
@@ -127,30 +133,54 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
         else:
             # === 云盘路径 ===
             # 飞书官方建议的流程：
-            # 1. 在原文档同级目录创建同名文件夹
+            # 1. 在原文档同级目录（或根目录）创建同名文件夹
             # 2. 在新文件夹中创建子文档
             
-            if not source_doc.parent_token:
-                raise RuntimeError(
-                    f"云盘文档缺少 parent_token，无法创建同级文件夹（doc_token={source_doc.doc_token}）"
-                )
+            # 确定父文件夹 token（None 或空字符串表示根目录）
+            parent_folder = source_doc.parent_token or ""
             
             logger.info(
-                "云盘场景：开始创建同名文件夹 parent_folder=%s, folder_name=%s",
-                source_doc.parent_token,
+                "云盘场景：准备创建同名文件夹 parent_folder=%s, folder_name=%s",
+                parent_folder or "(root)",
                 source_doc.title,
             )
             
-            # 1) 创建与原文档同名的文件夹
-            new_folder_token = await self._feishu.drive.create_folder(
-                parent_folder_token=source_doc.parent_token,
-                name=source_doc.title,
-            )
-            
-            logger.info(
-                "成功创建文件夹：%s，现在在其中创建子文档",
-                new_folder_token,
-            )
+            # 1) 创建与原文档同名的文件夹（如果已存在则复用）
+            try:
+                new_folder_token = await self._feishu.drive.create_folder(
+                    parent_folder_token=parent_folder,
+                    name=source_doc.title,
+                )
+                folder_name = source_doc.title  # 记录实际创建的文件夹名
+                logger.info(
+                    "成功创建文件夹：%s，现在在其中创建子文档",
+                    new_folder_token,
+                )
+            except Exception as e:
+                # 检查是否是“文件夹已存在”错误（1062505）
+                error_str = str(e)
+                if "1062505" in error_str or "folder already exists" in error_str.lower():
+                    logger.info(
+                        "文件夹 '%s' 已存在，尝试在其中创建文档（需要获取现有文件夹 token）",
+                        source_doc.title,
+                    )
+                    # TODO: 这里可以调用“查询文件夹列表”API 获取现有文件夹的 token
+                    # 暂时：使用带编号的新名称重试
+                    import time
+                    timestamp = int(time.time())
+                    new_name = f"{source_doc.title}_{timestamp}"
+                    folder_name = new_name  # 记录实际使用的文件夹名
+                    logger.info("使用新名称重试：%s", new_name)
+                    new_folder_token = await self._feishu.drive.create_folder(
+                        parent_folder_token=parent_folder,
+                        name=new_name,
+                    )
+                else:
+                    # 其他错误，直接抛出
+                    raise
+                        
+            # 保存文件夹信息供后续返回
+            folder_token = new_folder_token
             
             # 2) 在新文件夹中创建子文档
             child_doc_token = await self._feishu.drive.create_doc(
@@ -173,9 +203,20 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
             await self._feishu.write_doc_content(child_doc_token, final_content)
 
         # 2) 回链到原文档末尾（原文档可为 Wiki 挂载的 docx，仍可用 docx blocks 接口）
-        await self._feishu.append_reference_block(
-            source_doc.doc_token, title, child_doc_url
-        )
+        # 注意：回链可能失败（如应用无编辑原文档权限），不影响主流程
+        try:
+            await self._feishu.append_reference_block(
+                source_doc.doc_token, title, child_doc_url
+            )
+            logger.info("成功在原文档末尾添加回链引用")
+            backlink_success = True
+        except Exception as e:
+            error_msg = str(e)
+            backlink_error = error_msg
+            logger.warning(
+                "回链到原文档失败（应用可能无编辑权限），但主流程已完成: %s",
+                error_msg,
+            )
 
         # 可选通知
         if notify_user:
@@ -197,6 +238,15 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
                 "wiki_node": wiki_node,
                 "wiki_node_token": wiki_node_token,
                 "wiki_space_id": wiki_space_id,
+                # 云盘场景：文件夹信息
+                "folder_token": folder_token,
+                "folder_url": f"https://feishu.cn/drive/folder/{folder_token}" if folder_token else None,
+                "folder_name": folder_name,
+                # 回链信息
+                "backlink_success": backlink_success,
+                "backlink_error": backlink_error,
+                "source_doc_token": source_doc.doc_token,
+                "source_doc_url": self._build_doc_url(source_doc.doc_token) if not wiki_node_token else f"https://feishu.cn/wiki/{wiki_node_token}",
             },
         )
 
