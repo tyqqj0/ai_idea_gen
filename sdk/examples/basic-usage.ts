@@ -13,7 +13,7 @@ async function example1_IdeaExpand() {
   console.log("\n========== 示例 1：云盘文档 - 思路扩展 ==========\n");
 
   const sdk = new FeishuAIDocSDK({
-    baseUrl: "http://175.24.200.253:8001",
+    baseUrl: "http://127.0.0.1:8001",
   });
 
   try {

@@ -58,7 +58,8 @@ npm install ../sdk
 import { FeishuAIDocSDK } from "@/utils/feishu-ai-sdk";
 
 const sdk = new FeishuAIDocSDK({
-  baseUrl: "https://api.example.com",  // 你的后端地址
+  baseUrl: "http://127.0.0.1:8001",  // 本地开发环境
+  // baseUrl: "https://your-api-domain.com",  // 生产环境
 });
 
 // 一键调用：触发 + 等待完成

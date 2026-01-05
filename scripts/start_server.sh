@@ -6,7 +6,10 @@ cd /home/parser/code/ai_idea_gen
 # 默认端口（可通过环境变量 PORT 或参数 --port 覆盖）
 PORT="${PORT:-8001}"
 
-# 从参数中解析 --port / --port=xxxx（并移除，避免传给 uvicorn 重复）
+# 默认日志级别（可通过环境变量 LOG_LEVEL 或参数 --log-level 覆盖）
+LOG_LEVEL="${LOG_LEVEL:-info}"
+
+# 从参数中解析 --port / --port=xxxx 和 --log-level（并移除，避免传给 uvicorn 重复）
 UVICORN_EXTRA_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -17,6 +20,19 @@ while [[ $# -gt 0 ]]; do
       ;;
     --port=*)
       PORT="${1#--port=}"
+      shift
+      ;;
+    --log-level)
+      shift
+      LOG_LEVEL="${1:-$LOG_LEVEL}"
+      shift
+      ;;
+    --log-level=*)
+      LOG_LEVEL="${1#--log-level=}"
+      shift
+      ;;
+    --debug)
+      LOG_LEVEL="debug"
       shift
       ;;
     *)
@@ -34,7 +50,7 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-echo "==> 准备启动后端：host=0.0.0.0 port=${PORT}"
+echo "==> 准备启动后端：host=0.0.0.0 port=${PORT} log_level=${LOG_LEVEL}"
 
 # 获取监听该端口的进程 PID（尽量使用 ss 的过滤语法，避免 grep 误匹配）
 get_listen_pids() {
@@ -71,8 +87,8 @@ if [[ -n "${PIDS}" ]]; then
   fi
 fi
 
-# 设置日志级别为 INFO，确保能看到 FeishuClient 的调试日志
-exec uvicorn backend.main:app --reload --host 0.0.0.0 --port "${PORT}" --log-level info "${UVICORN_EXTRA_ARGS[@]}"
+# 设置日志级别，支持 info/debug 等
+exec uvicorn backend.main:app --reload --host 0.0.0.0 --port "${PORT}" --log-level "${LOG_LEVEL}" "${UVICORN_EXTRA_ARGS[@]}"
 
 
 

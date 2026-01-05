@@ -78,6 +78,19 @@ async def ping() -> Dict[str, str]:
     return {"message": "pong"}
 
 
+@router.get("/addon/modes", summary="获取所有可用的处理模式")
+async def get_available_modes() -> Dict[str, Any]:
+    """
+    返回所有可用的 mode 列表，方便前端验证和显示。
+    """
+    modes = workflow_registry.list_modes()
+    return {
+        "modes": modes,
+        "default": "idea_expand",
+        "count": len(modes),
+    }
+
+
 @router.post(
     "/addon/process",
     summary="触发文档处理",
@@ -85,12 +98,32 @@ async def ping() -> Dict[str, str]:
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def trigger_process(payload: AddonProcessRequest) -> AddonProcessAccepted:
+    # 记录请求详情（用于 debug）
+    logger.info(
+        "[POST /addon/process] 收到请求: token=%s, doc_token=%s, user_id=%s, mode=%s, trigger_source=%s",
+        payload.token[:10] + "..." if payload.token and len(payload.token) > 10 else payload.token,
+        payload.doc_token[:10] + "..." if payload.doc_token and len(payload.doc_token) > 10 else payload.doc_token,
+        payload.user_id,
+        payload.mode,
+        payload.trigger_source,
+    )
+    
     try:
         workflow_registry.get(payload.mode)
     except ValueError as exc:
+        logger.error("[POST /addon/process] 无效的 mode: %s, 错误: %s", payload.mode, exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    doc_token, wiki_node_token, wiki_space_id = await _resolve_tokens(payload)
+    try:
+        doc_token, wiki_node_token, wiki_space_id = await _resolve_tokens(payload)
+    except HTTPException as exc:
+        logger.error(
+            "[POST /addon/process] Token 解析失败: token=%s, doc_token=%s, 错误: %s",
+            payload.token,
+            payload.doc_token,
+            exc.detail,
+        )
+        raise
 
     ctx = ProcessContext(
         doc_token=doc_token,
@@ -136,8 +169,16 @@ async def _resolve_tokens(payload: AddonProcessRequest) -> tuple[str, Optional[s
         2) 若 wiki 查失败，则把 token 当作 doc_token
     """
     token = payload.token or payload.doc_token
+    logger.debug(
+        "[_resolve_tokens] 输入: token=%s, doc_token=%s, wiki_node_token=%s",
+        token,
+        payload.doc_token,
+        payload.wiki_node_token,
+    )
     if not token:
-        raise HTTPException(status_code=400, detail="token 或 doc_token 必须提供")
+        error_msg = f"token 或 doc_token 必须提供（收到: token={payload.token}, doc_token={payload.doc_token}）"
+        logger.error("[_resolve_tokens] %s", error_msg)
+        raise HTTPException(status_code=400, detail=error_msg)
 
     # 若前端已显式提供 wiki_node_token/space_id，则直接信任并使用传入的 doc_token（若空则回退 token）
     if payload.wiki_node_token or payload.wiki_space_id:
@@ -150,6 +191,7 @@ async def _resolve_tokens(payload: AddonProcessRequest) -> tuple[str, Optional[s
     # 尝试将 token 视为 node_token，查询 wiki 信息；失败则降级为 doc_token
     feishu = trigger_service._pm._feishu  # type: ignore[attr-defined]
     try:
+        logger.debug("[_resolve_tokens] 尝试将 token 作为 Wiki 节点解析: %s", token)
         wiki_node = await feishu.get_wiki_node_by_token(node_token=token)
         doc_token = (
             wiki_node.get("obj_token")
@@ -159,12 +201,24 @@ async def _resolve_tokens(payload: AddonProcessRequest) -> tuple[str, Optional[s
         )
         space_id = wiki_node.get("space_id")
         if doc_token:
+            logger.info(
+                "[_resolve_tokens] Wiki 节点解析成功: node_token=%s -> doc_token=%s, space_id=%s",
+                token,
+                doc_token,
+                space_id,
+            )
             return str(doc_token), token, str(space_id) if space_id else None
-    except FeishuAPIError:
+    except FeishuAPIError as e:
         # 不是 wiki 节点或无权限，则降级为普通 doc_token
+        logger.info(
+            "[_resolve_tokens] 不是 Wiki 节点（或无权限），降级为普通 doc_token: %s, 错误: %s",
+            token,
+            str(e),
+        )
         pass
 
     # 默认当作 doc_token（云盘或普通文档）
+    logger.info("[_resolve_tokens] 使用普通 doc_token 模式: %s", token)
     return token, None, None
 
 

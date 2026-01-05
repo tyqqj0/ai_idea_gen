@@ -6,7 +6,7 @@ export interface AddonProcessRequest {
    * 若同时传 token 与 doc_token，则后端优先使用 token。
    */
   token?: string | null;
-  doc_token: string;
+  doc_token?: string | null;  // 修改为可选，与后端对齐
   user_id: string;
   mode?: Mode;
   trigger_source?: string | null;
@@ -39,8 +39,8 @@ export interface TaskStatusResponse {
 export interface SDKConfig {
   /**
    * 后端 baseUrl，例如：
-   * - 本地：http://127.0.0.1:8001
-   * - 生产：https://api.example.com
+   * - 本地开发：http://127.0.0.1:8001
+   * - 生产环境：https://your-api-domain.com
    */
   baseUrl: string;
 
@@ -68,7 +68,11 @@ export interface TriggerOptions {
    * 若不传则使用 docToken
    */
   token?: string;
-  docToken: string;
+  /**
+   * 可选：云盘文档 token（doccn/doxc 开头）
+   * 如果传了 token 参数，可以不传 docToken
+   */
+  docToken?: string;
   userId: string;
   mode?: Mode;
   triggerSource?: string;

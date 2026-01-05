@@ -56,7 +56,15 @@ class WorkflowRegistry:
         try:
             return self._mapping[mode]
         except KeyError as exc:  # noqa: B904
-            raise ValueError(f"Unsupported processing mode: {mode}") from exc
+            available_modes = ", ".join(sorted(self._mapping.keys()))
+            raise ValueError(
+                f"Unsupported processing mode: '{mode}'. "
+                f"Available modes: {available_modes}"
+            ) from exc
+    
+    def list_modes(self) -> list[str]:
+        """返回所有可用的 mode 列表。"""
+        return list(self._mapping.keys())
 
 
 class ProcessManager:

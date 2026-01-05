@@ -52,7 +52,11 @@ import { FeishuAIDocSDK } from "../../utils/feishu-ai-sdk";
 
 ```typescript
 const sdk = new FeishuAIDocSDK({
-  baseUrl: "https://your-backend-api.com",  // 替换为你的后端地址
+  // 本地开发环境
+  baseUrl: "http://127.0.0.1:8001",
+  
+  // 生产环境（替换为你的后端域名）
+  // baseUrl: "https://your-backend-api.com",
 });
 ```
 
