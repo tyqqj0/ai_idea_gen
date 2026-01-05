@@ -68,6 +68,10 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
         folder_name: str | None = None
         backlink_success: bool = False
         backlink_error: str | None = None
+        
+        # 权限添加状态
+        permission_granted: bool = False
+        permission_errors: list[str] = []
 
         if wiki_node_token:
             # === 知识库路径 ===
@@ -112,6 +116,18 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
                 wiki_space_id,
                 wiki_node_token,
             )
+            
+            # 添加用户权限（知识库：edit + container）
+            perm_ok, perm_err = await self._grant_permission_safe(
+                token=child_node_token,
+                file_type="wiki",
+                user_id=ctx.user_id,
+                perm="edit",
+                perm_type="container",
+            )
+            permission_granted = perm_ok
+            if perm_err:
+                permission_errors.append(perm_err)
 
             # 部分场景下新建文档的 docx 接口存在短暂可见性延迟，等待片刻再写内容
             await asyncio.sleep(5.0)
@@ -145,42 +161,81 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
                 source_doc.title,
             )
             
-            # 1) 创建与原文档同名的文件夹（如果已存在则复用）
-            try:
-                new_folder_token = await self._feishu.drive.create_folder(
-                    parent_folder_token=parent_folder,
-                    name=source_doc.title,
-                )
-                folder_name = source_doc.title  # 记录实际创建的文件夹名
-                logger.info(
-                    "成功创建文件夹：%s，现在在其中创建子文档",
-                    new_folder_token,
-                )
-            except Exception as e:
-                # 检查是否是“文件夹已存在”错误（1062505）
-                error_str = str(e)
-                if "1062505" in error_str or "folder already exists" in error_str.lower():
+            # 1) 先查询同级目录下是否已有同名文件夹
+            existing_folders = await self._feishu.drive.list_files(
+                folder_token=parent_folder,
+                page_size=200,
+                type_filter="folder",
+            )
+            new_folder_token: str | None = None
+            for item in existing_folders:
+                item_name = item.get("name") or item.get("title")
+                item_token = item.get("token")
+                if item_name == source_doc.title and item_token:
+                    new_folder_token = str(item_token)
+                    folder_name = item_name  # 记录复用的文件夹名
                     logger.info(
-                        "文件夹 '%s' 已存在，尝试在其中创建文档（需要获取现有文件夹 token）",
-                        source_doc.title,
+                        "发现同名文件夹已存在，将复用: token=%s, name=%s",
+                        new_folder_token,
+                        folder_name,
                     )
-                    # TODO: 这里可以调用“查询文件夹列表”API 获取现有文件夹的 token
-                    # 暂时：使用带编号的新名称重试
-                    import time
-                    timestamp = int(time.time())
-                    new_name = f"{source_doc.title}_{timestamp}"
-                    folder_name = new_name  # 记录实际使用的文件夹名
-                    logger.info("使用新名称重试：%s", new_name)
+                    break
+            
+            # 如未找到同名文件夹，则创建新文件夹
+            if not new_folder_token:
+                try:
                     new_folder_token = await self._feishu.drive.create_folder(
                         parent_folder_token=parent_folder,
-                        name=new_name,
+                        name=source_doc.title,
                     )
-                else:
-                    # 其他错误，直接抛出
-                    raise
-                        
+                    folder_name = source_doc.title  # 记录实际创建的文件夹名
+                    logger.info(
+                        "成功创建文件夹：%s，现在在其中创建子文档",
+                        new_folder_token,
+                    )
+                except Exception as e:
+                    # 检查是否是“文件夹已存在”错误（1062505）——可能是并发场景下其他请求刚创建了同名文件夹
+                    error_str = str(e)
+                    if "1062505" in error_str or "folder already exists" in error_str.lower():
+                        logger.info(
+                            "检测到同名文件夹已存在，重新查询以获取现有文件夹 token，name=%s",
+                            source_doc.title,
+                        )
+                        existing_folders = await self._feishu.drive.list_files(
+                            folder_token=parent_folder,
+                            page_size=200,
+                            type_filter="folder",
+                        )
+                        for item in existing_folders:
+                            item_name = item.get("name") or item.get("title")
+                            item_token = item.get("token")
+                            if item_name == source_doc.title and item_token:
+                                new_folder_token = str(item_token)
+                                folder_name = item_name
+                                logger.info(
+                                    "复用现有同名文件夹: token=%s, name=%s",
+                                    new_folder_token,
+                                    folder_name,
+                                )
+                                break
+                        if not new_folder_token:
+                            # 理论上不应发生：返回“已存在”但又查不到；此时向上抛出便于排查
+                            raise
+                    else:
+                        # 其他错误，直接抛出
+                        raise
             # 保存文件夹信息供后续返回
             folder_token = new_folder_token
+            
+            # 添加文件夹权限（云盘：view）
+            folder_perm_ok, folder_perm_err = await self._grant_permission_safe(
+                token=new_folder_token,
+                file_type="folder",
+                user_id=ctx.user_id,
+                perm="view",
+            )
+            if folder_perm_err:
+                permission_errors.append(folder_perm_err)
             
             # 2) 在新文件夹中创建子文档
             child_doc_token = await self._feishu.drive.create_doc(
@@ -188,6 +243,19 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
                 title=title,
             )
             child_doc_url = self._build_doc_url(child_doc_token)
+            
+            # 添加文档权限（云盘：view）
+            doc_perm_ok, doc_perm_err = await self._grant_permission_safe(
+                token=child_doc_token,
+                file_type="docx",
+                user_id=ctx.user_id,
+                perm="view",
+            )
+            if doc_perm_err:
+                permission_errors.append(doc_perm_err)
+            
+            # 权限添加状态：两个都成功才算成功
+            permission_granted = folder_perm_ok and doc_perm_ok
             
             # 追加元数据到文档末尾
             from backend.services.utils.metadata_builder import build_metadata_section
@@ -247,6 +315,9 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
                 "backlink_error": backlink_error,
                 "source_doc_token": source_doc.doc_token,
                 "source_doc_url": self._build_doc_url(source_doc.doc_token) if not wiki_node_token else f"https://feishu.cn/wiki/{wiki_node_token}",
+                # 权限添加状态
+                "permission_granted": permission_granted,
+                "permission_errors": permission_errors if permission_errors else None,
             },
         )
 
@@ -278,6 +349,53 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
         
         # 添加标签，标签和标题之间加一个空格
         return f"{label} {title}"
+    
+    async def _grant_permission_safe(
+        self,
+        token: str,
+        file_type: str,
+        user_id: str,
+        perm: str,
+        perm_type: str | None = None,
+    ) -> tuple[bool, str | None]:
+        """
+        安全添加权限（失败不阻断主流程）
+        
+        参数:
+            - token: 文件/文件夹/wiki节点 token
+            - file_type: 资源类型 ("file", "wiki")
+            - user_id: 用户 open_id
+            - perm: 权限级别 ("view", "edit")
+            - perm_type: wiki 权限范围 ("container", "single_page")
+        
+        返回: (是否成功, 错误信息)
+        """
+        try:
+            await self._feishu.drive.add_permission(
+                token=token,
+                file_type=file_type,
+                member_id=user_id,
+                perm=perm,
+                member_type="openid",
+                collaborator_type="user",
+                perm_type=perm_type,
+            )
+            logger.info(
+                "权限添加成功: token=%s, type=%s, user=%s, perm=%s",
+                token,
+                file_type,
+                user_id[:10] + "..." if len(user_id) > 10 else user_id,
+                perm,
+            )
+            return True, None
+        except Exception as e:
+            error_msg = str(e)
+            logger.warning(
+                "权限添加失败（不影响主流程）: token=%s, error=%s",
+                token,
+                error_msg,
+            )
+            return False, error_msg
     
     def _build_notify_card(
         self, *, ctx: "ProcessContext", child_doc_url: str, summary: str | None
