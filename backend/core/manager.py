@@ -95,14 +95,19 @@ class ProcessManager:
 
         workflow = self._registry.get(ctx.mode)
         await report("fetch_meta", 5, "获取文档元信息")
-        file_meta = await self._feishu.get_doc_meta(ctx.doc_token)
-        file_info = file_meta.get("file") or file_meta
-        doc_title = file_info.get("name") or file_info.get("title") or "未命名文档"
-        parent_token = (
-            file_info.get("parent_token")
-            or file_info.get("folder_token")
-            or file_info.get("parent_id")
-        )
+        
+        # 区分 Wiki 和云盘场景，使用不同的 API 获取元数据
+        if ctx.wiki_node_token:
+            # Wiki 场景：使用 docx API（元数据较简单）
+            file_meta = await self._feishu.get_doc_meta(ctx.doc_token)
+            file_info = file_meta.get("file") or file_meta
+            doc_title = file_info.get("name") or file_info.get("title") or "未命名文档"
+            parent_token = None  # Wiki 场景不需要 parent_token
+        else:
+            # 云盘场景：使用 Drive API 获取完整元数据（包含 parent_token）
+            file_meta = await self._feishu.drive.get_file_meta(ctx.doc_token)
+            doc_title = file_meta.get("name") or file_meta.get("title") or "未命名文档"
+            parent_token = file_meta.get("parent_token")
 
         await report("fetch_content", 15, "读取文档内容")
         doc_content = await self._feishu.get_doc_content(ctx.doc_token)

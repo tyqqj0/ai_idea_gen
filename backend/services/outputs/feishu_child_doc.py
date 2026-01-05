@@ -126,16 +126,42 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
             await self._feishu.write_doc_content(child_doc_token, final_content)
         else:
             # === 云盘路径 ===
-            # 尽量将子文档创建在原文档所在目录下（folder_token）
-            folder_token = source_doc.parent_token or source_doc.doc_token
-            child_doc_token = await self._feishu.create_child_doc(
-                folder_token=folder_token,
+            # 飞书官方建议的流程：
+            # 1. 在原文档同级目录创建同名文件夹
+            # 2. 在新文件夹中创建子文档
+            
+            if not source_doc.parent_token:
+                raise RuntimeError(
+                    f"云盘文档缺少 parent_token，无法创建同级文件夹（doc_token={source_doc.doc_token}）"
+                )
+            
+            logger.info(
+                "云盘场景：开始创建同名文件夹 parent_folder=%s, folder_name=%s",
+                source_doc.parent_token,
+                source_doc.title,
+            )
+            
+            # 1) 创建与原文档同名的文件夹
+            new_folder_token = await self._feishu.drive.create_folder(
+                parent_folder_token=source_doc.parent_token,
+                name=source_doc.title,
+            )
+            
+            logger.info(
+                "成功创建文件夹：%s，现在在其中创建子文档",
+                new_folder_token,
+            )
+            
+            # 2) 在新文件夹中创建子文档
+            child_doc_token = await self._feishu.drive.create_doc(
+                folder_token=new_folder_token,
                 title=title,
             )
+            child_doc_url = self._build_doc_url(child_doc_token)
+            
             # 追加元数据到文档末尾
             from backend.services.utils.metadata_builder import build_metadata_section
             
-            # 构建元数据（包含原始内容）
             metadata = build_metadata_section(
                 mode=ctx.mode,
                 source_title=source_doc.title,
@@ -145,7 +171,6 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
             )
             final_content = processor_result.content_md + metadata
             await self._feishu.write_doc_content(child_doc_token, final_content)
-            child_doc_url = self._build_doc_url(child_doc_token)
 
         # 2) 回链到原文档末尾（原文档可为 Wiki 挂载的 docx，仍可用 docx blocks 接口）
         await self._feishu.append_reference_block(
