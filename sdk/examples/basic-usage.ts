@@ -2,6 +2,8 @@
  * SDK 基础使用示例
  * 
  * 注意：这些示例需要后端服务运行在 http://127.0.0.1:8001
+ * 
+ * 新增：支持懒加载自动初始化，快捷方法，通用方法
  */
 
 import { FeishuAIDocSDK } from "../src/index.js";

@@ -389,7 +389,7 @@ console.log(result.containerUrl);     // 文件夹/节点链接
 
 ### 6.3 SDK 新增接口
 
-``typescript
+```typescript
 // types.ts 新增
 interface AuthRequest {
   code: string;
@@ -399,36 +399,87 @@ interface AuthResponse {
   open_id: string;
 }
 
-interface TriggerOptions {
-  token: string;
+interface ProcessOptions {
   mode: string;
-  content?: string;           // 新增：划词文本
-  wikiNodeToken?: string;
-  wikiSpaceId?: string;
-  triggerSource?: string;
-  // userId 不再需要传入，SDK 自动附加
+  content?: string;  // 新增：划词文本
+}
+
+interface IdeaExpandOptions {
+  content?: string;
+}
+
+interface ResearchOptions {
+  content?: string;
+}
+
+interface SaveOptions {
+  content: string;
+  title?: string;
+}
+
+interface SDKConfig {
+  baseUrl: string;
+  // 新增：自定义 Provider（可选）
+  docTokenProvider?: () => string | Promise<string>;
+  wikiInfoProvider?: () => { nodeToken?: string; spaceId?: string } | Promise<...>;
+  codeProvider?: () => Promise<string>;
 }
 
 // client.ts 新增
 class FeishuAIDocSDK {
-  private openId: string | null = null;
+  // 环境信息缓存
+  private _docToken: string | null = null;
+  private _openId: string | null = null;
+  private _wikiNodeToken: string | null = null;
+  private _wikiSpaceId: string | null = null;
 
-  async auth(code: string): Promise<void> {
-    const resp = await this.http.postJSON<AuthResponse>("/addon/auth", { code });
-    this.openId = resp.open_id;
+  // 懒加载：自动获取环境信息
+  private async ensureDocToken(): Promise<string> { ... }
+  private async ensureOpenId(): Promise<string> { ... }
+
+  // 快捷方法
+  async ideaExpand(opts: IdeaExpandOptions = {}): Promise<GenerateResult> {
+    return this.process({ mode: "idea_expand", content: opts.content });
   }
 
-  async trigger(options: TriggerOptions): Promise<AddonProcessAccepted> {
-    if (!this.openId) {
-      throw new Error("Not authenticated. Call auth() first.");
-    }
-    const payload = {
-      ...options,
-      user_id: this.openId,  // 自动附加
-    };
-    return await this.http.postJSON("/addon/process", payload);
+  async research(opts: ResearchOptions = {}): Promise<GenerateResult> {
+    return this.process({ mode: "research", content: opts.content });
   }
+
+  async save(opts: SaveOptions): Promise<SaveResult> {
+    // 直接保存，不经过 AI 处理
+  }
+
+  // 通用方法
+  async process(opts: ProcessOptions): Promise<GenerateResult> {
+    const [docToken, openId] = await Promise.all([
+      this.ensureDocToken(),
+      this.ensureOpenId(),
+    ]);
+    // 自动附加环境参数
+  }
+
+  // 高级方法
+  setContext(ctx: { docToken?, wikiNodeToken?, wikiSpaceId? }): this
+  clearContext(): this  // 清除文档上下文，openId 保留
 }
+```
+
+### 6.4 实际使用示例
+
+```typescript
+// 初始化（只需一次）
+const sdk = new FeishuAIDocSDK({ baseUrl: "https://api.example.com" });
+
+// 第一次调用：自动触发登录、获取 docToken、换取 openId
+const result1 = await sdk.ideaExpand({ content: selectedText });
+
+// 后续调用：直接复用缓存
+await sdk.research({ content: selectedText });
+await sdk.save({ content: "...", title: "..." });
+
+// 切换文档时清除上下文
+sdk.clearContext();
 ```
 
 ## 7. 重构计划

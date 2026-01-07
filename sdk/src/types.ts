@@ -9,9 +9,18 @@ export interface AddonProcessRequest {
   doc_token?: string | null;  // 修改为可选，与后端对齐
   user_id: string;
   mode?: Mode;
+  content?: string | null;  // 用户选中的文本（划词内容）
   trigger_source?: string | null;
   wiki_node_token?: string | null;
   wiki_space_id?: string | null;
+}
+
+export interface AuthRequest {
+  code: string;
+}
+
+export interface AuthResponse {
+  open_id: string;
 }
 
 export interface AddonProcessAccepted {
@@ -60,6 +69,24 @@ export interface SDKConfig {
    * 默认使用 globalThis.fetch
    */
   fetch?: typeof fetch;
+
+  /**
+   * 可选：自定义获取文档 token 的方式（测试/特殊场景）
+   * 默认使用飞书环境的 getCurrentDocToken()
+   */
+  docTokenProvider?: () => string | Promise<string>;
+
+  /**
+   * 可选：自定义获取知识库信息的方式
+   * 默认从飞书环境获取
+   */
+  wikiInfoProvider?: () => { nodeToken?: string; spaceId?: string } | Promise<{ nodeToken?: string; spaceId?: string }>;
+
+  /**
+   * 可选：自定义获取用户登录 code 的方式
+   * 默认调用 DocMiniApp.Service.User.login()
+   */
+  codeProvider?: () => Promise<string>;
 }
 
 export interface TriggerOptions {
@@ -75,9 +102,29 @@ export interface TriggerOptions {
   docToken?: string;
   userId: string;
   mode?: Mode;
+  content?: string;  // 用户选中的文本（划词内容）
   triggerSource?: string;
   wikiNodeToken?: string;
   wikiSpaceId?: string;
+}
+
+export interface ProcessOptions {
+  mode: string;
+  content?: string;
+  [key: string]: any;  // 允许扩展参数
+}
+
+export interface IdeaExpandOptions {
+  content?: string;
+}
+
+export interface ResearchOptions {
+  content?: string;
+}
+
+export interface SaveOptions {
+  content: string;
+  title?: string;
 }
 
 export interface GenerateOptions extends TriggerOptions {
@@ -109,6 +156,17 @@ export interface GenerateResult {
    */
   childDocUrl?: string;
   childDocToken?: string;
+  containerUrl?: string;
+  containerToken?: string;
+}
+
+export interface SaveResult {
+  taskId: string;
+  status: "succeeded" | "failed";
+  childDocUrl?: string;
+  childDocToken?: string;
+  containerUrl?: string;
+  error?: string;
 }
 
 

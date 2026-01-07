@@ -4,10 +4,12 @@
 
 ## ✨ 功能特点
 
-- ✅ **简单配置**：一行代码配置后端地址
+- ✅ **自动初始化**：首次调用自动获取环境信息（docToken、openId），无需手动传参
+- ✅ **懒加载机制**：环境信息获取一次后缓存复用，高效便捷
+- ✅ **快捷方法**：`ideaExpand()`、`research()`、`save()` 语义化接口
+- ✅ **通用方法**：`process({ mode })` 支持任意模式，灵活扩展
 - ✅ **类型安全**：完整的 TypeScript 类型定义
 - ✅ **状态追踪**：自动轮询任务状态，实时进度回调
-- ✅ **通用易用**：`generate()` 一键调用，支持云盘文档和知识库
 - ✅ **环境适配**：支持浏览器、Node.js、小程序（可注入 fetch 实现）
 
 ---
@@ -50,53 +52,86 @@ npm install ../sdk
 
 ---
 
-## 🚀 快速开始
+# 🚀 快速开始
 
-### 示例 1：云盘文档 - 思路扩展
+### 🌟 推荐用法：零配置自动初始化
 
 ```typescript
 import { FeishuAIDocSDK } from "@/utils/feishu-ai-sdk";
 
+// 初始化（只需配置后端地址）
 const sdk = new FeishuAIDocSDK({
-  baseUrl: "http://127.0.0.1:8001",  // 本地开发环境
+  baseUrl: "http://127.0.0.1:8001",  // 本地开发
   // baseUrl: "https://your-api-domain.com",  // 生产环境
 });
 
-// 一键调用：触发 + 等待完成
-const result = await sdk.generate({
-  docToken: "doxcnxxxx",    // 云盘文档 token
-  userId: "ou_xxx",          // 用户 ID
-  mode: "idea_expand",       // 思路扩展模式
-  triggerSource: "docs_addon",
-  
-  // 进度回调（可选）
-  onProgress: (p) => {
-    console.log(`${p.percent ?? 0}% - ${p.message}`);
-  },
-});
+// 第一次调用：自动触发登录、获取 docToken、换取 openId
+// 用户划词后点击"扩展思路"
+const selectedText = getSelectedText();
+const result = await sdk.ideaExpand({ content: selectedText });
 
 console.log("生成完成:", result.childDocUrl);
+
+// 后续调用：直接复用缓存，无感知
+await sdk.research({ content: selectedText });
+await sdk.save({ content: "我的笔记", title: "标题" });
 ```
 
-### 示例 2：知识库文档 - 深度调研
+### 示例 1：快捷方法（推荐）
 
 ```typescript
-const result = await sdk.generate({
-  token: "wikcnxxxx",        // 知识库 node_token（wikcn 开头）
-  userId: "ou_xxx",
-  mode: "research",          // 深度调研模式
-  wikiSpaceId: "7xxxxx",     // 知识库 space_id
-  
-  // 深度调研可能耗时较长
-  timeoutMs: 300_000,        // 5 分钟超时
-  pollIntervalMs: 3000,      // 每 3 秒轮询一次
-  
-  onProgress: (p) => {
-    console.log(`[${p.stage}] ${p.percent ?? 0}% - ${p.message}`);
-  },
+// 思路扩展
+const result1 = await sdk.ideaExpand({ 
+  content: "用户选中的文本" 
 });
 
-console.log("调研完成:", result.childDocUrl);
+// 深度调研
+const result2 = await sdk.research({ 
+  content: "用户选中的文本" 
+});
+
+// 通用保存（不经过 AI 处理）
+const result3 = await sdk.save({ 
+  content: "要保存的内容",
+  title: "文档标题" 
+});
+
+console.log(result1.childDocUrl);  // 新文档链接
+console.log(result1.containerUrl); // 文件夹/节点链接
+```
+
+### 示例 2：通用方法（灵活调用）
+
+```typescript
+// 支持任意 mode，适合动态工具列表
+const tools = [
+  { id: "idea_expand", name: "扩展思路" },
+  { id: "research", name: "深度调研" },
+  { id: "summarize", name: "总结摘要" },  // 新工具无需改 SDK
+];
+
+async function handleToolClick(toolId: string) {
+  const result = await sdk.process({
+    mode: toolId,
+    content: getSelectedText(),
+  });
+  showToast(`已生成：${result.childDocUrl}`);
+}
+```
+
+### 示例 3：自定义获取方式（测试/特殊场景）
+
+```typescript
+const sdk = new FeishuAIDocSDK({
+  baseUrl: "https://api.example.com",
+  // 自定义 docToken 获取方式（用于测试）
+  docTokenProvider: () => "hardcoded_token_for_test",
+  // 自定义 code 获取方式
+  codeProvider: async () => {
+    // 自定义登录逻辑
+    return "test_code";
+  },
+});
 ```
 
 ### 示例 3：分步调用（手动控制）
@@ -126,6 +161,89 @@ console.log("结果:", finalTask.result);
 
 ---
 
+## 🛠️ API 参考
+
+### 核心方法
+
+#### `ideaExpand(options)` - 思路扩展
+
+```typescript
+const result = await sdk.ideaExpand({
+  content: "用户选中的文本",  // 可选
+});
+```
+
+#### `research(options)` - 深度调研
+
+```typescript
+const result = await sdk.research({
+  content: "用户选中的文本",  // 可选
+});
+```
+
+#### `save(options)` - 通用保存
+
+```typescript
+const result = await sdk.save({
+  content: "要保存的内容",  // 必选
+  title: "文档标题",          // 可选，不传则自动生成
+});
+```
+
+#### `process(options)` - 通用处理
+
+```typescript
+const result = await sdk.process({
+  mode: "idea_expand",      // 必选：处理模式
+  content: "用户文本",      // 可选：划词内容
+});
+```
+
+### 高级方法
+
+#### `setContext(ctx)` - 手动设置上下文
+
+```typescript
+sdk.setContext({
+  docToken: "doxcn...",
+  wikiNodeToken: "wikcn...",
+  wikiSpaceId: "7xxx",
+});
+```
+
+#### `clearContext()` - 清除上下文（切换文档时）
+
+```typescript
+sdk.clearContext();  // openId 不会被清除
+```
+
+### 原有方法（向后兼容）
+
+#### `trigger(options)` - 触发任务
+
+```typescript
+const accepted = await sdk.trigger({
+  token: "doxcn...",
+  userId: "ou_xxx",  // 需手动传入
+  mode: "idea_expand",
+  content: "用户文本",
+});
+```
+
+#### `generate(options)` - 一键生成
+
+```typescript
+const result = await sdk.generate({
+  docToken: "doxcn...",
+  userId: "ou_xxx",  // 需手动传入
+  mode: "idea_expand",
+  content: "用户文本",
+  onProgress: (p) => console.log(p.message),
+});
+```
+
+---
+
 ## 🔧 配置选项
 
 ### SDKConfig（SDK 初始化配置）
@@ -143,10 +261,41 @@ interface SDKConfig {
   
   /** fetch 实现注入（可选，默认使用 globalThis.fetch）*/
   fetch?: typeof fetch;
+  
+  /** 自定义 docToken 获取方式（可选，默认从飞书环境获取）*/
+  docTokenProvider?: () => string | Promise<string>;
+  
+  /** 自定义知识库信息获取方式（可选）*/
+  wikiInfoProvider?: () => { nodeToken?: string; spaceId?: string } | Promise<...>;
+  
+  /** 自定义用户 code 获取方式（可选，默认调用 DocMiniApp.Service.User.login()）*/
+  codeProvider?: () => Promise<string>;
 }
 ```
 
-### GenerateOptions（生成任务配置）
+### ProcessOptions / IdeaExpandOptions / ResearchOptions
+
+```typescript
+interface ProcessOptions {
+  mode: string;      // 处理模式
+  content?: string;  // 用户选中的文本
+}
+
+interface IdeaExpandOptions {
+  content?: string;  // 用户选中的文本
+}
+
+interface ResearchOptions {
+  content?: string;  // 用户选中的文本
+}
+
+interface SaveOptions {
+  content: string;   // 要保存的内容（必填）
+  title?: string;    // 文档标题（可选，不传则自动生成）
+}
+```
+
+### GenerateOptions（生成任务配置，向后兼容）
 
 ```typescript
 interface GenerateOptions {
