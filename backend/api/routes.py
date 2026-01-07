@@ -35,6 +35,7 @@ class AddonProcessRequest(BaseModel):
     )
     user_id: str = Field(..., description="触发用户 open_id")
     mode: str = Field(default="idea_expand", description="处理模式")
+    content: Optional[str] = Field(default=None, description="用户选中的文本（划词内容）")
     trigger_source: Optional[str] = Field(default=None, description="触发来源")
     wiki_node_token: Optional[str] = Field(default=None, description="（可选）知识库父节点 node_token")
     wiki_space_id: Optional[str] = Field(default=None, description="（可选）知识库 space_id")
@@ -130,6 +131,7 @@ async def trigger_process(payload: AddonProcessRequest) -> AddonProcessAccepted:
         user_id=payload.user_id,
         mode=payload.mode,
         trigger_source=payload.trigger_source or "docs_addon",
+        selected_text=payload.content,  # 传递划词文本
         wiki_node_token=wiki_node_token,
         wiki_space_id=wiki_space_id,
     )

@@ -21,6 +21,8 @@ class ProcessContext:
     user_id: str
     mode: str
     trigger_source: str | None = None
+    # 用户选中的文本（划词内容）
+    selected_text: str | None = None
     # Wiki（知识库）上下文：如果文档来自知识库，前端/触发方建议传入
     wiki_node_token: str | None = None
     wiki_space_id: str | None = None
