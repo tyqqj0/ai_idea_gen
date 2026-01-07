@@ -83,6 +83,92 @@ class FeishuBaseClient:
             )
             return token
 
+    async def exchange_code_for_user_token(self, code: str) -> Dict[str, Any]:
+        """
+        用临时授权码（code）换取用户访问令牌（user_access_token）和用户信息
+        
+        调用飞书 OIDC 接口：
+        POST /open-apis/authen/v1/oidc/access_token
+        
+        Args:
+            code: 前端通过 DocMiniApp.Service.User.login() 获取的临时授权码
+        
+        Returns:
+            dict: 包含 access_token, open_id, user_id 等用户信息
+            {
+                "access_token": "u-xxx",
+                "token_type": "Bearer",
+                "expires_in": 7200,
+                "refresh_token": "ur-xxx",
+                "refresh_expires_in": 2592000,
+                "scope": "...",
+                "open_id": "ou_xxx",  # 这是我们需要的
+                "tenant_key": "...",
+                "user_id": "..."
+            }
+        
+        Raises:
+            FeishuAPIError: 认证失败时抛出
+        """
+        payload = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "client_id": self.settings.FEISHU_APP_ID,
+            "client_secret": self.settings.FEISHU_APP_SECRET,
+        }
+
+        logger.info(
+            "Exchanging code for user token (app_id=%s, code=%s...)",
+            self.settings.FEISHU_APP_ID,
+            code[:8] if len(code) > 8 else "***",
+        )
+
+        try:
+            resp = await self._client.post(
+                "/open-apis/authen/v1/oidc/access_token",
+                json=payload,
+            )
+            data = resp.json()
+
+            # 检查响应
+            if resp.status_code != 200 or data.get("code") != 0:
+                error_msg = data.get("msg", "Unknown error")
+                logger.error(
+                    "Failed to exchange code: status=%d, code=%d, msg=%s",
+                    resp.status_code,
+                    data.get("code", -1),
+                    error_msg,
+                )
+                raise FeishuAPIError(
+                    f"Authentication failed: {error_msg}",
+                    status_code=resp.status_code,
+                )
+
+            user_data = data.get("data", {})
+            open_id = user_data.get("open_id", "")
+            
+            # 打码日志
+            masked_open_id = f"{open_id[:8]}..." if len(open_id) > 8 else "***"
+            logger.info(
+                "Successfully exchanged code for user token: open_id=%s",
+                masked_open_id,
+            )
+
+            return user_data
+
+        except httpx.HTTPError as e:
+            logger.error("HTTP error during authentication: %s", e)
+            raise FeishuAPIError(
+                f"Network error during authentication: {e}",
+                status_code=502,
+            )
+        except JSONDecodeError as e:
+            logger.error("Failed to parse authentication response: %s", e)
+            raise FeishuAPIError(
+                "Invalid response from authentication service",
+                status_code=502,
+            )
+
     async def request(
         self,
         method: str,

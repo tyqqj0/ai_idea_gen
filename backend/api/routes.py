@@ -18,10 +18,21 @@ from backend.core.workflow_loader import build_default_workflow_registry, load_w
 from backend.core.task_store import TaskStatus, TaskStore
 from backend.services.feishu import FeishuClient, FeishuAPIError
 from backend.services.triggers.service import TriggerService
+from backend.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class AuthRequest(BaseModel):
+    """用户认证请求：code 换取 open_id"""
+    code: str = Field(..., description="飞书登录返回的临时授权码")
+
+
+class AuthResponse(BaseModel):
+    """用户认证响应"""
+    open_id: str = Field(..., description="用户的 open_id")
 
 
 class AddonProcessRequest(BaseModel):
@@ -77,6 +88,66 @@ trigger_service = TriggerService(task_store=task_store, process_manager=process_
 @router.get("/ping", summary="简单连通性测试")
 async def ping() -> Dict[str, str]:
     return {"message": "pong"}
+
+
+@router.post(
+    "/addon/auth",
+    summary="用户认证：code 换取 open_id",
+    response_model=AuthResponse,
+)
+async def auth(payload: AuthRequest) -> AuthResponse:
+    """
+    用户认证接口：使用飞书登录返回的 code 换取用户 open_id
+    
+    流程：
+    1. 前端调用 DocMiniApp.Service.User.login() 获取 code
+    2. 前端调用此接口，传入 code
+    3. 后端使用 app_id + app_secret + code 调用飞书 OIDC 接口
+    4. 飞书返回 user_access_token 和用户信息（包含 open_id）
+    5. 返回 open_id 给前端，前端 SDK 缓存
+    
+    Args:
+        payload: 包含飞书登录返回的 code
+    
+    Returns:
+        AuthResponse: 包含用户 open_id
+    
+    Raises:
+        HTTPException: code 无效、认证失败等情况
+    """
+    logger.info("[POST /addon/auth] 收到认证请求: code=%s...", payload.code[:10])
+    
+    feishu = FeishuClient()
+    
+    try:
+        # 调用飞书 OIDC 接口：用 code 换取 user_access_token 和用户信息
+        # 响应中直接包含 open_id，无需额外调用 /userinfo 接口
+        user_data = await feishu._base.exchange_code_for_user_token(payload.code)
+        
+        open_id = user_data.get("open_id")
+        
+        if not open_id:
+            logger.error("[POST /addon/auth] 响应中缺少 open_id: %s", user_data.keys())
+            raise HTTPException(
+                status_code=400,
+                detail="无法获取用户 open_id，认证数据异常"
+            )
+        
+        logger.info("[POST /addon/auth] 认证成功: open_id=%s...", open_id[:10])
+        return AuthResponse(open_id=open_id)
+        
+    except FeishuAPIError as e:
+        logger.error("[POST /addon/auth] 飞书 API 调用失败: %s", e)
+        raise HTTPException(
+            status_code=401,
+            detail=f"认证失败: {str(e)}"
+        ) from e
+    except Exception as e:
+        logger.exception("[POST /addon/auth] 未知错误")
+        raise HTTPException(
+            status_code=500,
+            detail="认证服务内部错误"
+        ) from e
 
 
 @router.get("/addon/modes", summary="获取所有可用的处理模式")
