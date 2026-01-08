@@ -356,11 +356,50 @@ export class FeishuAIDocSDK {
 
   /**
    * 一键：触发 + 等待完成（带进度回调）
+   * 
+   * 特点：自动获取环境信息 + 实时进度回调 + 任务缓存
+   * 适用场景：需要显示进度条或实时反馈的长时间任务
+   * 
+   * 注意：如果提供了 userId 和 docToken，则使用手动模式；否则自动获取
    */
   public async generate(options: GenerateOptions): Promise<GenerateResult> {
-    const accepted = await this.trigger(options);
-    const taskId = accepted.task_id;
+    let userId: string;
+    let docToken: string;
+    let wikiNodeToken: string | undefined;
+    let wikiSpaceId: string | undefined;
 
+    // 如果提供了 userId 和 docToken，则使用手动模式
+    if (options.userId && options.docToken) {
+      userId = options.userId;
+      docToken = options.docToken;
+      wikiNodeToken = options.wikiNodeToken;
+      wikiSpaceId = options.wikiSpaceId;
+    } else {
+      // 否则自动获取
+      [docToken, userId] = await Promise.all([
+        this.ensureDocToken(),
+        this.ensureOpenId(),
+      ]);
+      wikiNodeToken = this._wikiNodeToken ?? undefined;
+      wikiSpaceId = this._wikiSpaceId ?? undefined;
+    }
+
+    // 构造触发参数
+    const triggerOptions: TriggerOptions = {
+      userId,
+      docToken,
+      mode: options.mode,
+      content: options.content,
+      triggerSource: options.triggerSource,
+      wikiNodeToken,
+      wikiSpaceId,
+    };
+
+    const accepted = await this.trigger(triggerOptions);
+    // 记住当前文档的最近一次任务，便于刷新后恢复
+    this.cacheTaskId(docToken, accepted.task_id);
+    
+    const taskId = accepted.task_id;
     const pollIntervalMs = options.pollIntervalMs ?? 2000;
     const timeoutMs = options.timeoutMs ?? 180_000;
     const deadline = Date.now() + timeoutMs;
