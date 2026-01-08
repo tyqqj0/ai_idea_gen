@@ -428,7 +428,7 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
         """构造基于飞书模板的通知卡片内容。"""
         # 模板配置（来自飞书小组件卡片模板）
         template_id = "AAqv1j7D8fD04"
-        template_version_name = "0.0.2"
+        template_version_name = "0.0.3"
 
         # 预览文本：使用摘要，退化为固定文案
         summary_text = summary or "处理完成，可前往子文档查看详情。"
