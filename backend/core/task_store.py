@@ -86,6 +86,27 @@ class TaskStore:
             # 返回副本避免外部修改
             return dict(self._tasks[task_id])
 
+    async def list_task_ids(
+        self,
+        *,
+        doc_token: str | None = None,
+        user_id: str | None = None,
+    ) -> list[str]:
+        """按 doc_token / user_id 过滤任务，按创建时间倒序返回 task_id 列表。"""
+        async with self._lock:
+            items: list[tuple[str, float]] = []
+            for task_id, data in self._tasks.items():
+                ctx = data.get("context") or {}
+                if doc_token and ctx.get("doc_token") != doc_token:
+                    continue
+                if user_id and ctx.get("user_id") != user_id:
+                    continue
+                items.append((task_id, float(data.get("created_at", 0.0))))
+
+            # 按创建时间倒序排序
+            items.sort(key=lambda x: x[1], reverse=True)
+            return [task_id for task_id, _ in items]
+
     async def _update(self, task_id: str, payload: Dict[str, Any]) -> None:
         async with self._lock:
             if task_id not in self._tasks:

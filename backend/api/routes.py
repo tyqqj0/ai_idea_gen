@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
@@ -240,6 +240,70 @@ async def get_task_status(task_id: str) -> TaskStatusResponse:
         doc_token=context.get("doc_token"),
         user_id=context.get("user_id"),
     )
+
+
+@router.get(
+    "/addon/tasks/by-doc",
+    summary="按文档查询任务历史",
+    response_model=List[TaskStatusResponse],
+)
+async def list_tasks_by_doc(doc_token: str, limit: int = 20) -> List[TaskStatusResponse]:
+    task_ids = await task_store.list_task_ids(doc_token=doc_token)
+    task_ids = task_ids[:limit]
+
+    items: List[TaskStatusResponse] = []
+    for tid in task_ids:
+        task = await task_store.get(tid)
+        if not task:
+            continue
+        context = task.get("context") or {}
+        items.append(
+            TaskStatusResponse(
+                task_id=tid,
+                status=task["status"],
+                result=task.get("result"),
+                error=task.get("error"),
+                progress=task.get("progress"),
+                created_at=task.get("created_at", 0.0),
+                updated_at=task.get("updated_at"),
+                mode=context.get("mode"),
+                doc_token=context.get("doc_token"),
+                user_id=context.get("user_id"),
+            )
+        )
+    return items
+
+
+@router.get(
+    "/addon/tasks/by-user",
+    summary="按用户查询任务历史",
+    response_model=List[TaskStatusResponse],
+)
+async def list_tasks_by_user(user_id: str, limit: int = 20) -> List[TaskStatusResponse]:
+    task_ids = await task_store.list_task_ids(user_id=user_id)
+    task_ids = task_ids[:limit]
+
+    items: List[TaskStatusResponse] = []
+    for tid in task_ids:
+        task = await task_store.get(tid)
+        if not task:
+            continue
+        context = task.get("context") or {}
+        items.append(
+            TaskStatusResponse(
+                task_id=tid,
+                status=task["status"],
+                result=task.get("result"),
+                error=task.get("error"),
+                progress=task.get("progress"),
+                created_at=task.get("created_at", 0.0),
+                updated_at=task.get("updated_at"),
+                mode=context.get("mode"),
+                doc_token=context.get("doc_token"),
+                user_id=context.get("user_id"),
+            )
+        )
+    return items
 
 
 async def _resolve_tokens(payload: AddonProcessRequest) -> tuple[str, Optional[str], Optional[str]]:

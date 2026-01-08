@@ -100,6 +100,51 @@ export class FeishuAIDocSDK {
     return this._openId;
   }
 
+  // ====== 本地任务缓存（可选）======
+
+  private getStorage(): Storage | null {
+    if (typeof globalThis === "undefined") return null;
+    const anyGlobal = globalThis as any;
+    if (anyGlobal.localStorage) {
+      return anyGlobal.localStorage as Storage;
+    }
+    return null;
+  }
+
+  private getTaskCacheKey(docToken: string): string {
+    return `ai_idea_gen:last_task:${docToken}`;
+  }
+
+  private cacheTaskId(docToken: string, taskId: string): void {
+    const storage = this.getStorage();
+    if (!storage) return;
+    try {
+      storage.setItem(this.getTaskCacheKey(docToken), taskId);
+    } catch {
+      // localStorage 可能不存在或超限，忽略错误
+    }
+  }
+
+  private readCachedTaskId(docToken: string): string | null {
+    const storage = this.getStorage();
+    if (!storage) return null;
+    try {
+      return storage.getItem(this.getTaskCacheKey(docToken));
+    } catch {
+      return null;
+    }
+  }
+
+  private clearCachedTaskId(docToken: string): void {
+    const storage = this.getStorage();
+    if (!storage) return;
+    try {
+      storage.removeItem(this.getTaskCacheKey(docToken));
+    } catch {
+      // ignore
+    }
+  }
+
   // ====== 通用处理接口 ======
 
   /**
@@ -123,6 +168,8 @@ export class FeishuAIDocSDK {
     };
 
     const accepted = await this.http.postJSON<AddonProcessAccepted>("/addon/process", payload);
+    // 记住当前文档的最近一次任务，便于刷新后恢复
+    this.cacheTaskId(docToken, accepted.task_id);
     return this._waitAndExtract(accepted.task_id);
   }
 
@@ -159,6 +206,8 @@ export class FeishuAIDocSDK {
     };
 
     const accepted = await this.http.postJSON<AddonProcessAccepted>("/addon/save", payload);
+    // 保存场景也记住最近一次任务
+    this.cacheTaskId(docToken, accepted.task_id);
     const task = await this.waitTask(accepted.task_id);
 
     const result = task.result ?? {};
@@ -245,6 +294,24 @@ export class FeishuAIDocSDK {
   }
 
   /**
+   * 按当前文档查询任务历史
+   */
+  public async getTasksByCurrentDoc(limit: number = 20): Promise<TaskStatusResponse[]> {
+    const docToken = await this.ensureDocToken();
+    const params = new URLSearchParams({ doc_token: docToken, limit: String(limit) });
+    return await this.http.getJSON<TaskStatusResponse[]>(`/addon/tasks/by-doc?${params.toString()}`);
+  }
+
+  /**
+   * 按当前用户查询任务历史
+   */
+  public async getTasksByCurrentUser(limit: number = 20): Promise<TaskStatusResponse[]> {
+    const openId = await this.ensureOpenId();
+    const params = new URLSearchParams({ user_id: openId, limit: String(limit) });
+    return await this.http.getJSON<TaskStatusResponse[]>(`/addon/tasks/by-user?${params.toString()}`);
+  }
+
+  /**
    * 等待任务完成（轮询）
    */
   public async waitTask(
@@ -263,6 +330,28 @@ export class FeishuAIDocSDK {
       }
       await sleep(pollIntervalMs);
     }
+  }
+
+  /**
+   * 获取当前文档的最近一次任务（如果有的话）
+   */
+  public async getLastTaskForCurrentDoc(): Promise<TaskStatusResponse | null> {
+    const docToken = await this.ensureDocToken();
+    const taskId = this.readCachedTaskId(docToken);
+    if (!taskId) return null;
+    try {
+      return await this.getTask(taskId);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 清除当前文档的任务缓存（例如用户已查看结果）
+   */
+  public async clearLastTaskForCurrentDoc(): Promise<void> {
+    const docToken = await this.ensureDocToken();
+    this.clearCachedTaskId(docToken);
   }
 
   /**

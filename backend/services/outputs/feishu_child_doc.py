@@ -289,7 +289,11 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
         # 可选通知
         if notify_user:
             card = self._build_notify_card(
-                ctx=ctx, child_doc_url=child_doc_url, summary=processor_result.summary
+                ctx=ctx,
+                child_doc_url=child_doc_url,
+                summary=processor_result.summary,
+                child_title=title,
+                source_title=source_doc.title,
             )
             try:
                 await self._feishu.send_card(user_id=ctx.user_id, card_content=card)
@@ -398,25 +402,51 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
             return False, error_msg
     
     def _build_notify_card(
-        self, *, ctx: "ProcessContext", child_doc_url: str, summary: str | None
+        self,
+        *,
+        ctx: "ProcessContext",
+        child_doc_url: str,
+        summary: str | None,
+        child_title: str,
+        source_title: str,
     ) -> Dict[str, Any]:
+        """构造基于飞书模板的通知卡片内容。"""
+        # 模板配置（来自飞书小组件卡片模板）
+        template_id = "AAqv1j7D8fD04"
+        template_version_name = "0.0.2"
+
+        # 预览文本：使用摘要，退化为固定文案
         summary_text = summary or "处理完成，可前往子文档查看详情。"
+
+        # 处理模式中文文案
+        mode_label = MODE_LABELS.get(ctx.mode) or ctx.mode
+        # MODE_LABELS 中是如 "[思路扩展]"，这里去掉方括号
+        if mode_label.startswith("[") and "]" in mode_label:
+            mode_label = mode_label.strip("[] ")
+
+        # 源文档标题
+        origin_doc = source_title
+
+        # 生成时间
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).astimezone()
+        time_str = now.strftime("%Y-%m-%d %H:%M:%S")
+
         return {
-            "config": {"wide_screen_mode": True},
-            "header": {"title": {"tag": "plain_text", "content": "AI 文档处理完成"}},
-            "elements": [
-                {
-                    "tag": "div",
-                    "text": {
-                        "tag": "lark_md",
-                        "content": (
-                            f"**处理模式**：{ctx.mode}\n"
-                            f"**结果**：[点击查看]({child_doc_url})\n\n"
-                            f"{summary_text}"
-                        ),
-                    },
-                }
-            ],
+            "type": "template",
+            "data": {
+                "template_id": template_id,
+                "template_version_name": template_version_name,
+                "template_variable": {
+                    "preview_text": summary_text,
+                    "title": child_title,
+                    "mode": mode_label,
+                    "origin_doc": origin_doc,
+                    "time": time_str,
+                    "url": child_doc_url,
+                },
+            },
         }
 
 
