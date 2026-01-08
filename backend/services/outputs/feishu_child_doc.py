@@ -8,6 +8,7 @@ from backend.services.feishu import FeishuClient
 from backend.services.outputs.base import BaseOutputHandler, OutputResult, SourceDoc
 from backend.services.processors.base import ProcessorResult
 from backend.services.utils.title_generator import TitleGenerator
+from backend.services.utils.preview_generator import PreviewGenerator
 
 if TYPE_CHECKING:
     from backend.core.manager import ProcessContext
@@ -30,6 +31,7 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
     def __init__(self, *, feishu_client: FeishuClient, llm_client: "LLMClient") -> None:
         self._feishu = feishu_client
         self._title_generator = TitleGenerator(llm_client=llm_client)
+        self._preview_generator = PreviewGenerator(llm_client=llm_client)
 
     async def handle(
         self,
@@ -288,17 +290,30 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
 
         # 可选通知
         if notify_user:
+            # 生成预览文本（使用智能模式 + 降级）
+            preview_text = await self._preview_generator.generate_preview(
+                content_md=processor_result.content_md,
+                mode=ctx.mode,
+            )
+            
+            # 构造源文档链接（根据是 wiki 还是云盘）
+            if ctx.wiki_node_token:
+                source_doc_url = f"https://feishu.cn/wiki/{wiki_node_token}"
+            else:
+                source_doc_url = self._build_doc_url(source_doc.doc_token)
+            origin_doc_link = f"[{source_doc.title}]({source_doc_url})"
+            
             card = self._build_notify_card(
                 ctx=ctx,
                 child_doc_url=child_doc_url,
-                summary=processor_result.summary,
+                summary=preview_text,  # 现在用智能生成的预览文本
                 child_title=title,
-                source_title=source_doc.title,
+                source_title=origin_doc_link,  # 传 Markdown 格式的链接
             )
             try:
                 await self._feishu.send_card(user_id=ctx.user_id, card_content=card)
             except Exception:
-                # 通知失败不影响主流程（日志在 FeishuClient 内/外层处理）
+                # 通知失败不影响主流程
                 pass
 
         return OutputResult(
@@ -424,7 +439,7 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
         if mode_label.startswith("[") and "]" in mode_label:
             mode_label = mode_label.strip("[] ")
 
-        # 源文档标题
+        # 源文档标题（现在是 Markdown 链接格式）
         origin_doc = source_title
 
         # 生成时间

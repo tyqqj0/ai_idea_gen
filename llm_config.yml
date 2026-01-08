@@ -56,6 +56,11 @@ chains:
     - provider: "no_thinking_gemini"
       timeout_s: 15
 
+  summary_generation:
+    - provider: "no_thinking_gemini"
+      timeout_s: 40
+
 global:
   max_retries_per_provider: 1
   overall_timeout_s: 60
+ 
