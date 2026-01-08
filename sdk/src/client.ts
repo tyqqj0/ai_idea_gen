@@ -47,7 +47,10 @@ export class FeishuAIDocSDK {
         this._docToken = await this.config.docTokenProvider();
       } else if (typeof globalThis !== "undefined" && (globalThis as any).DocMiniApp) {
         const DocMiniApp = (globalThis as any).DocMiniApp;
-        this._docToken = DocMiniApp.getCurrentDocToken();
+        
+        // 使用官方 API：getActiveDocumentRef() 是异步方法，返回 { docToken: "xxx" }
+        const docRef = await DocMiniApp.getActiveDocumentRef();
+        this._docToken = docRef?.docToken ?? null;
 
         // 顺便获取知识库信息
         if (this.config.wikiInfoProvider) {

@@ -85,62 +85,81 @@ class FeishuBaseClient:
 
     async def exchange_code_for_user_token(self, code: str) -> Dict[str, Any]:
         """
-        用临时授权码（code）换取用户访问令牌（user_access_token）和用户信息
+        用云文档小组件登录返回的 code 换取用户信息
         
-        调用飞书 OIDC 接口：
-        POST /open-apis/authen/v1/oidc/access_token
+        【重要】云文档小组件必须使用专用接口，不能使用 OIDC 标准接口
+        调用飞书小程序接口：
+        POST /open-apis/mina/v2/tokenLoginValidate
         
         Args:
             code: 前端通过 DocMiniApp.Service.User.login() 获取的临时授权码
         
         Returns:
-            dict: 包含 access_token, open_id, user_id 等用户信息
+            dict: 包含 open_id, employee_id, access_token 等用户信息
             {
-                "access_token": "u-xxx",
-                "token_type": "Bearer",
-                "expires_in": 7200,
-                "refresh_token": "ur-xxx",
-                "refresh_expires_in": 2592000,
-                "scope": "...",
-                "open_id": "ou_xxx",  # 这是我们需要的
-                "tenant_key": "...",
-                "user_id": "..."
+                "open_id": "ou_xxx",           # 用户 Open ID（必有）
+                "employee_id": "xxx",          # 用户 User ID（需权限）
+                "session_key": "xxx",          # 会话密钥
+                "tenant_key": "xxx",           # 企业标识
+                "access_token": "u-xxx",       # user_access_token
+                "expires_in": 1234567890,      # 过期时间戳
+                "refresh_token": "ur-xxx"      # 刷新令牌
             }
         
         Raises:
             FeishuAPIError: 认证失败时抛出
+                - 10202: app_access_token 无效
+                - 10213: code 与 app 不匹配，或 code 重复使用/过期
+                - 10226: code 不合法
+                - 10228: 用户对应用无可见性
         """
-        payload = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "client_id": self.settings.FEISHU_APP_ID,
-            "client_secret": self.settings.FEISHU_APP_SECRET,
-        }
-
+        # 1. 先获取 app_access_token（复用已有的 tenant_access_token 获取逻辑）
+        app_token = await self.get_tenant_access_token()
+        masked_app_token = f"{app_token[:4]}...{app_token[-4:]}" if len(app_token) > 8 else "***"
+        
         logger.info(
-            "Exchanging code for user token (app_id=%s, code=%s...)",
+            "Exchanging code for user token (app_id=%s, code=%s..., app_token=%s)",
             self.settings.FEISHU_APP_ID,
             code[:8] if len(code) > 8 else "***",
+            masked_app_token,
         )
+
+        # 2. 调用小程序专用接口
+        payload = {"code": code}
+        headers = {"Authorization": f"Bearer {app_token}"}
 
         try:
             resp = await self._client.post(
-                "/open-apis/authen/v1/oidc/access_token",
+                "/open-apis/mina/v2/tokenLoginValidate",
                 json=payload,
+                headers=headers,
             )
             data = resp.json()
 
             # 检查响应
             if resp.status_code != 200 or data.get("code") != 0:
+                error_code = data.get("code", -1)
                 error_msg = data.get("msg", "Unknown error")
+                
+                # 根据错误码提供更详细的错误信息
+                error_hints = {
+                    10202: "app_access_token 无效或已过期",
+                    10213: "code 与应用不匹配，或 code 已被使用/过期（code 仅能使用一次）",
+                    10226: "code 不合法或已过期",
+                    10228: "用户对该应用无可见性",
+                }
+                hint = error_hints.get(error_code, "")
+                detailed_msg = f"{error_msg} (错误码: {error_code})" + (f" - {hint}" if hint else "")
+                
                 logger.error(
-                    "Failed to exchange code: status=%d, code=%d, msg=%s",
+                    "Failed to exchange code: status=%d, code=%d, msg=%s, hint=%s",
                     resp.status_code,
-                    data.get("code", -1),
+                    error_code,
                     error_msg,
+                    hint,
                 )
                 raise FeishuAPIError(
-                    f"Authentication failed: {error_msg}",
+                    f"Authentication failed: {detailed_msg}",
                     status_code=resp.status_code,
                 )
 
