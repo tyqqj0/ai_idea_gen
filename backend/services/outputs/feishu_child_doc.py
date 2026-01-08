@@ -43,7 +43,9 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
     ) -> OutputResult:
         # 智能标题生成：如果原标题包含"未命名"，则调用 AI 生成标题
         title = processor_result.title or f"{source_doc.title} - AI 生成"
-        if "未命名" in title:
+        # 智能标题生成触发条件：空标题or包含"未命名"
+                # if "未命名" in title:
+        if not title or "未命名" in title:
             logger.info("检测到未命名文档，启动智能标题生成")
             try:
                 title = await self._title_generator.generate_title(
@@ -55,8 +57,10 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
             except Exception as exc:
                 logger.warning("标题生成失败，使用默认标题: %s", exc)
                 # title 保持原值（fallback 已在 TitleGenerator 内部处理）
+        else:
+            logger.info("使用默认标题: %s", title)
         
-        # 添加模式标签（如 [思路扩展]）
+        # 添加模式标签（如 [思路扩展]），但避免重复添加模式名称
         title = self._add_mode_label(title, ctx.mode)
         logger.info("添加标签后的最终标题: %s", title)
 
@@ -365,6 +369,16 @@ class FeishuChildDocOutputHandler(BaseOutputHandler):
         # 检查标题是否已经包含标签（避免重复添加）
         if title.startswith(label):
             return title
+        
+        # 检查标题是否包含模式名称（如 "标题 - 思路扩展"），如果有则先移除
+        mode_display = label.strip("[] ")  # 提取模式名称，如 "[思路扩展]" -> "思路扩展"
+        if " - " in title:
+            parts = title.rsplit(" - ", 1)
+            if len(parts) == 2:
+                base_title, suffix = parts
+                if suffix == mode_display:
+                    # 标题是 "源标题 - 模式名称" 格式，移除后缀
+                    title = base_title
         
         # 添加标签，标签和标题之间加一个空格
         return f"{label} {title}"
