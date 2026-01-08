@@ -213,6 +213,7 @@ export class FeishuAIDocSDK {
       childDocToken: typeof result["child_doc_token"] === "string" ? result["child_doc_token"] : undefined,
       containerUrl: typeof result["container_url"] === "string" ? result["container_url"] : undefined,
       containerToken: typeof result["container_token"] === "string" ? result["container_token"] : undefined,
+      error: task.error ?? undefined,
     };
   }
 
@@ -312,6 +313,7 @@ export class FeishuAIDocSDK {
           childDocToken: typeof result["child_doc_token"] === "string" ? result["child_doc_token"] : undefined,
           containerUrl: typeof result["container_url"] === "string" ? result["container_url"] : undefined,
           containerToken: typeof result["container_token"] === "string" ? result["container_token"] : undefined,
+          error: task.error ?? undefined,
         };
       }
 

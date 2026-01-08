@@ -66,6 +66,10 @@ class TaskStatusResponse(BaseModel):
     progress: Optional[Dict[str, Any]] = None
     created_at: float
     updated_at: Optional[float] = None
+    # 任务上下文信息（便于前端展示/调试）
+    mode: Optional[str] = None
+    doc_token: Optional[str] = None
+    user_id: Optional[str] = None
 
 
 task_store = TaskStore()
@@ -222,6 +226,8 @@ async def get_task_status(task_id: str) -> TaskStatusResponse:
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    context = task.get("context") or {}
+
     return TaskStatusResponse(
         task_id=task_id,
         status=task["status"],
@@ -230,6 +236,9 @@ async def get_task_status(task_id: str) -> TaskStatusResponse:
         progress=task.get("progress"),
         created_at=task.get("created_at", 0.0),
         updated_at=task.get("updated_at"),
+        mode=context.get("mode"),
+        doc_token=context.get("doc_token"),
+        user_id=context.get("user_id"),
     )
 
 

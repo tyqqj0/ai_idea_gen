@@ -41,6 +41,9 @@ export interface TaskStatusResponse {
     percent?: number;
     message?: string;
   } | null;
+  mode?: string;
+  doc_token?: string;
+  user_id?: string;
   created_at: number;
   updated_at?: number | null;
 }
@@ -158,6 +161,7 @@ export interface GenerateResult {
   childDocToken?: string;
   containerUrl?: string;
   containerToken?: string;
+  error?: string;
 }
 
 export interface SaveResult {
