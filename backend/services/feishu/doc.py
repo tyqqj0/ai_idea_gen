@@ -70,10 +70,14 @@ class FeishuDocClient:
         if not isinstance(blocks, list) or not blocks:
             raise FeishuAPIError(f"convert_to_blocks returned invalid blocks: {data}")
         
-        # 飞书要求表格的 merge_info 只读，需移除
+        # 飞书要求表格的 merge_info 只读，写入时需移除
+        # block_type=31 是表格，merge_info 在 table.property.merge_info
         for blk in blocks:
-            if blk.get("block_type") == "table":
-                blk.pop("merge_info", None)
+            if blk.get("block_type") == 31:  # table
+                table_data = blk.get("table", {})
+                if "property" in table_data and "merge_info" in table_data["property"]:
+                    del table_data["property"]["merge_info"]
+                    logger.debug("Removed merge_info from table block %s", blk.get("block_id"))
         
         logger.info(
             "convert_markdown_to_blocks succeeded: blocks=%d, first_level_blocks=%d",
