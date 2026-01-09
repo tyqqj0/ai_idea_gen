@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import get_settings
 from dotenv import load_dotenv
@@ -23,6 +24,15 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="AI Idea Generator Backend",
         version="0.1.0",
+    )
+
+    # 配置 CORS - 允许飞书小组件等前端跨域访问
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # 生产环境可限制为特定域名
+        allow_credentials=True,
+        allow_methods=["*"],  # 允许所有 HTTP 方法（GET, POST, OPTIONS 等）
+        allow_headers=["*"],  # 允许所有请求头
     )
 
     # 预加载配置，启动时如果 .env 有问题可以尽早暴露
